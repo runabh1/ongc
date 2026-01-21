@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { SnippingTool } from '../components/SnippingTool';
-import { ResultsTable } from '../components/ResultsTable';
+import { SnippingTool } from './components/SnippingTool';
+import { ResultsTable } from './components/ResultsTable';
 import { uploadFile, extractData, exportData, saveData, downloadTemplate, exportDataAsPdf } from './api';
 
 interface Extraction {

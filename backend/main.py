@@ -266,7 +266,9 @@ async def extract(
     sel_dict = json.loads(selection)
     sel_obj = RegionSelection(**sel_dict)
     
-    file_path = os.path.join(UPLOAD_DIR, filename)
+    # Security: Ensure filename is just the name, not a path
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
     
     table_name = LABEL_TO_TABLE.get(sel_obj.label)
     if not table_name:
