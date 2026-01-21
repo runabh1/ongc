@@ -1,0 +1,36 @@
+# Node.js
+node_modules/
+dist/
+build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Application Specific
+backend/uploads/
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+backend/*.pdf
+backend/*.csv
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
