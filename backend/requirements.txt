@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+pdfplumber
+sqlalchemy
+pandas
+pydantic
+psycopg2-binary
+reportlab
+google-generativeai
+# For demo purposes using sqlite, but production uses postgres
