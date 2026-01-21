@@ -11,6 +11,21 @@ interface Extraction {
   schema: string[];
 }
 
+const TABLE_MAP: Record<string, string> = {
+  "WELL_HEADER": "WCR_WELLHEAD",
+  "WCR_WELLHEAD": "WCR_WELLHEAD",
+  "CASING": "WCR_CASING",
+  "WCR_CASING": "WCR_CASING",
+  "LOGS": "WCR_LOGSRECORD",
+  "WCR_LOGSRECORD": "WCR_LOGSRECORD",
+  "DIRSRVY": "WCR_DIRSRVY",
+  "WCR_DIRSRVY": "WCR_DIRSRVY",
+  "SWC": "WCR_SWC",
+  "WCR_SWC": "WCR_SWC",
+  "HCSHOWS": "WCR_HCSHOWS",
+  "WCR_HCSHOWS": "WCR_HCSHOWS"
+};
+
 function App() {
   const [file, setFile] = useState<File | null>(null);
   const [uploadedName, setUploadedName] = useState<string>("");
@@ -64,22 +79,8 @@ function App() {
   };
 
   const handleSave = async (extraction: Extraction) => {
-    const tableMap: any = { 
-      "WELL_HEADER": "WCR_WELLHEAD", 
-      "WCR_WELLHEAD": "WCR_WELLHEAD",
-      "CASING": "WCR_CASING",
-      "WCR_CASING": "WCR_CASING",
-      "LOGS": "WCR_LOGSRECORD",
-      "WCR_LOGSRECORD": "WCR_LOGSRECORD",
-      "DIRSRVY": "WCR_DIRSRVY",
-      "WCR_DIRSRVY": "WCR_DIRSRVY",
-      "SWC": "WCR_SWC",
-      "WCR_SWC": "WCR_SWC",
-      "HCSHOWS": "WCR_HCSHOWS",
-      "WCR_HCSHOWS": "WCR_HCSHOWS"
-    };
     try {
-      const res = await saveData(extraction.sqlData, tableMap[extraction.label]);
+      const res = await saveData(extraction.sqlData, TABLE_MAP[extraction.label]);
       alert(res.message);
     } catch (err: any) {
       alert("Save failed: " + (err.response?.data?.detail || err.message));
@@ -87,40 +88,11 @@ function App() {
   };
 
   const handleExport = async (extraction: Extraction) => {
-    // Map label to table name again (simple logic for demo)
-    const tableMap: any = { 
-      "WELL_HEADER": "WCR_WELLHEAD", 
-      "WCR_WELLHEAD": "WCR_WELLHEAD",
-      "CASING": "WCR_CASING",
-      "WCR_CASING": "WCR_CASING",
-      "LOGS": "WCR_LOGSRECORD",
-      "WCR_LOGSRECORD": "WCR_LOGSRECORD",
-      "DIRSRVY": "WCR_DIRSRVY",
-      "WCR_DIRSRVY": "WCR_DIRSRVY",
-      "SWC": "WCR_SWC",
-      "WCR_SWC": "WCR_SWC",
-      "HCSHOWS": "WCR_HCSHOWS",
-      "WCR_HCSHOWS": "WCR_HCSHOWS"
-    };
-    await exportData(extraction.sqlData, tableMap[extraction.label]);
+    await exportData(extraction.sqlData, TABLE_MAP[extraction.label]);
   };
 
   const handleExportPdf = async (extraction: Extraction) => {
-    const tableMap: any = { 
-      "WELL_HEADER": "WCR_WELLHEAD", 
-      "WCR_WELLHEAD": "WCR_WELLHEAD",
-      "CASING": "WCR_CASING",
-      "WCR_CASING": "WCR_CASING",
-      "LOGS": "WCR_LOGSRECORD",
-      "WCR_LOGSRECORD": "WCR_LOGSRECORD",
-      "DIRSRVY": "WCR_DIRSRVY",
-      "WCR_DIRSRVY": "WCR_DIRSRVY",
-      "SWC": "WCR_SWC",
-      "WCR_SWC": "WCR_SWC",
-      "HCSHOWS": "WCR_HCSHOWS",
-      "WCR_HCSHOWS": "WCR_HCSHOWS"
-    };
-    await exportDataAsPdf(extraction.sqlData, tableMap[extraction.label]);
+    await exportDataAsPdf(extraction.sqlData, TABLE_MAP[extraction.label]);
   };
 
   return (

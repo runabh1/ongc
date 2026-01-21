@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 import pdfplumber
 import pandas as pd
 from pydantic import BaseModel
@@ -40,6 +39,10 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+@app.get("/")
+def read_root():
+    return {"message": "Backend is running successfully. Use /docs for API documentation."}
 
 # --- MODELS ---
 class RegionSelection(BaseModel):
@@ -431,20 +434,6 @@ async def export_pdf(data: str = Form(...), table_name: str = Form(...)):
     elements.append(t)
     doc.build(elements)
     return FileResponse(output_path, filename=f"{table_name}_report.pdf")
-
-# --- STATIC FILES (FRONTEND) ---
-# Must be placed at the end to avoid overriding API routes
-frontend_dist = os.path.join(BASE_DIR, "..", "dist")
-frontend_build = os.path.join(BASE_DIR, "..", "build")
-
-if os.path.exists(frontend_dist):
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="static")
-elif os.path.exists(frontend_build):
-    app.mount("/", StaticFiles(directory=frontend_build, html=True), name="static")
-else:
-    @app.get("/")
-    def read_root():
-        return {"message": "Frontend build not found. Please run 'npm run build' in the root directory."}
 
 if __name__ == "__main__":
     import uvicorn
