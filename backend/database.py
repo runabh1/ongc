@@ -168,21 +168,47 @@ def init_db():
         # For PostgreSQL, execute via SQLAlchemy connection
         try:
             with engine.connect() as conn:
+                # First check which tables already exist
+                from sqlalchemy import inspect
+                inspector = inspect(engine)
+                existing_tables = set(inspector.get_table_names())
+                print(f"✓ Existing tables in database: {existing_tables}")
+                
                 # Split by semicolon and execute each statement
                 statements = [s.strip() for s in sql_script.split(';') if s.strip()]
+                created_count = 0
                 for statement in statements:
                     try:
-                        conn.execute(text(statement))
-                        print(f"✓ Executed: {statement[:50]}...")
+                        # Skip if it's a DROP or CREATE for an existing table
+                        if statement.startswith("DROP"):
+                            conn.execute(text(statement))
+                            print(f"✓ Dropped table: {statement[20:50]}...")
+                        elif statement.startswith("CREATE"):
+                            conn.execute(text(statement))
+                            created_count += 1
+                            # Extract table name for logging
+                            table_name = statement.split("(")[0].replace("CREATE TABLE", "").strip()
+                            print(f"✓ Created table: {table_name}")
                     except Exception as e:
-                        # Only skip if table already exists
-                        if "already exists" not in str(e).lower():
-                            print(f"✗ Error executing statement: {statement[:50]}... -> {str(e)}")
-                            raise  # Re-raise if it's not an "already exists" error
+                        error_msg = str(e).lower()
+                        if "already exists" in error_msg or "duplicate" in error_msg:
+                            print(f"⊘ Table already exists (skipped)")
+                        else:
+                            print(f"✗ Error: {statement[:50]}... -> {str(e)}")
+                            raise
+                
                 conn.commit()
-                print("✓ Database tables initialized successfully")
+                print(f"✓ Database initialized: {created_count} tables created/updated")
+                
+                # Verify tables were created
+                inspector = inspect(engine)
+                final_tables = set(inspector.get_table_names())
+                print(f"✓ Final tables in database: {final_tables}")
+                
         except Exception as e:
             print(f"✗ Database initialization error: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     else:
         # For SQLite, use sqlite3 directly
