@@ -207,27 +207,29 @@ IGNORED_COLUMNS = {
 def validate_data(data: List[Dict], table_name: str):
     try:
         schema = get_table_schema(table_name)
+        print(f"✓ Successfully loaded schema for table {table_name} with {len(schema)} columns")
     except ValueError as e:
         # Table doesn't exist, try to initialize the database
-        print(f"Table {table_name} not found, attempting to initialize database...")
+        print(f"✗ Table {table_name} not found, attempting to initialize database...")
         try:
             init_db()
             # Try again after initialization
             schema = get_table_schema(table_name)
+            print(f"✓ After init_db: loaded schema for {table_name} with {len(schema)} columns")
         except Exception as init_err:
-            print(f"Database initialization failed: {init_err}")
+            print(f"✗ Database initialization failed: {init_err}")
             # Fallback: Create schema from extracted data
             if not data:
                 return {"error": "No data to validate"}
             schema = {k: "TEXT" for k in data[0].keys() if not k.startswith("_")}
-            print(f"Using fallback schema with {len(schema)} columns")
+            print(f"⚠ Using fallback schema with {len(schema)} columns from extracted data")
     except Exception as e:
-        print(f"Schema reflection error for {table_name}: {str(e)}")
+        print(f"✗ Schema reflection error for {table_name}: {str(e)}")
         # Fallback: Create schema from extracted data
         if not data:
             return {"error": "No data to validate"}
         schema = {k: "TEXT" for k in data[0].keys() if not k.startswith("_")}
-        print(f"Using fallback schema with {len(schema)} columns")
+        print(f"⚠ Using fallback schema with {len(schema)} columns from extracted data")
 
     validated_rows = []
     
@@ -243,6 +245,7 @@ def validate_data(data: List[Dict], table_name: str):
     
     # Filter schema for display/validation (exclude system columns)
     display_columns = [k for k in schema.keys() if k.upper() not in IGNORED_COLUMNS]
+    print(f"Display columns for {table_name}: {len(display_columns)} columns - {display_columns[:5]}...")
     
     for row in data:
         row_status = "VALID"

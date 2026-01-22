@@ -65,7 +65,6 @@ def get_postgres_schema():
     );
 
     CREATE TABLE WCR_CASING (
-        ID SERIAL PRIMARY KEY,
         UWI VARCHAR(64) NOT NULL,
         CASING_TYPE VARCHAR(255),
         CASING_LINER_NAME VARCHAR(255),
@@ -79,6 +78,7 @@ def get_postgres_schema():
         WEIGHT VARCHAR(64),
         STEEL_GRADE VARCHAR(64),
         REMARKS TEXT,
+        ID INTEGER PRIMARY KEY,
         MODEL VARCHAR(25),
         INSERT_DATE DATE,
         MATCH_PERCENT FLOAT,
@@ -88,13 +88,13 @@ def get_postgres_schema():
     );
 
     CREATE TABLE WCR_LOGSRECORD (
-        ID SERIAL PRIMARY KEY,
         UWI VARCHAR(64) NOT NULL,
         TOP FLOAT,
         BOTTOM FLOAT,
         LOG_RECORDED VARCHAR(255),
         LOG_DATE VARCHAR(11),
         LOGGED_BY VARCHAR(64),
+        ID INTEGER PRIMARY KEY,
         MODEL VARCHAR(25),
         INSERT_DATE DATE,
         MATCH_PERCENT FLOAT,
@@ -104,7 +104,7 @@ def get_postgres_schema():
     );
 
     CREATE TABLE WCR_DIRSRVY (
-        ID SERIAL PRIMARY KEY,
+        ID INTEGER PRIMARY KEY,
         UWI VARCHAR(64),
         MD FLOAT,
         ANGLE_INCLINATION FLOAT,
@@ -123,14 +123,14 @@ def get_postgres_schema():
     );
 
     CREATE TABLE WCR_SWC (
-        ID SERIAL PRIMARY KEY,
-        UWI VARCHAR(64),
         DEPTH FLOAT,
         RECOVERED_LENGTH FLOAT,
         LITHOLOGY VARCHAR(255),
         LITHOLOGY_DESCRIPTION TEXT,
         HCSHOW VARCHAR(255),
         REMARKS VARCHAR(255),
+        ID INTEGER PRIMARY KEY,
+        UWI VARCHAR(64),
         MODEL VARCHAR(25),
         INSERT_DATE DATE,
         MATCH_PERCENT FLOAT,
@@ -140,7 +140,7 @@ def get_postgres_schema():
     );
 
     CREATE TABLE WCR_HCSHOWS (
-        ID SERIAL PRIMARY KEY,
+        ID INTEGER PRIMARY KEY,
         UWI VARCHAR(64),
         TOP_DEPTH FLOAT,
         BOTTOM_DEPTH FLOAT,
@@ -148,6 +148,13 @@ def get_postgres_schema():
         LITHOLOGY VARCHAR(255),
         HCSHOW VARCHAR(255),
         MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100),
+        MATCH_ID INTEGER
+    );
+    """
         INSERT_DATE DATE,
         MATCH_PERCENT FLOAT,
         VECTOR_IDS VARCHAR(100),
