@@ -20,28 +20,173 @@ else:
 
 metadata = MetaData()
 
+def get_postgres_schema():
+    """Return PostgreSQL-compatible schema"""
+    return """
+    DROP TABLE IF EXISTS WCR_CASING CASCADE;
+    DROP TABLE IF EXISTS WCR_LOGSRECORD CASCADE;
+    DROP TABLE IF EXISTS WCR_DIRSRVY CASCADE;
+    DROP TABLE IF EXISTS WCR_SWC CASCADE;
+    DROP TABLE IF EXISTS WCR_HCSHOWS CASCADE;
+    DROP TABLE IF EXISTS WCR_WELLHEAD CASCADE;
+
+    CREATE TABLE WCR_WELLHEAD (
+        UWI VARCHAR(64) PRIMARY KEY NOT NULL,
+        WELL_NAME VARCHAR(255),
+        FIELD VARCHAR(255),
+        RELEASE_NAME VARCHAR(255),
+        LOCATION_TYPE VARCHAR(128),
+        BOTTOM_LONG FLOAT,
+        BOTTOM_LAT FLOAT,
+        SURFACE_LONG FLOAT,
+        SURFACE_LAT FLOAT,
+        CATEGORY VARCHAR(255),
+        WELL_PROFILE VARCHAR(64),
+        TARGET_DEPTH FLOAT,
+        DRILLED_DEPTH FLOAT,
+        LOGGERS_DEPTH FLOAT,
+        K_B FLOAT,
+        G_L FLOAT,
+        RIG VARCHAR(255),
+        SPUD_DATE VARCHAR(11),
+        HERMETICAL_TEST_DATE VARCHAR(11),
+        DRILLING_COMPLETED_DATE VARCHAR(11),
+        RIG_RELEASED_DATE VARCHAR(11),
+        FORMATION_AT_TD VARCHAR(255),
+        RELEASE_ORDER_NO VARCHAR(255),
+        OBJECTIVE TEXT,
+        STATUS TEXT,
+        ID INTEGER,
+        MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100)
+    );
+
+    CREATE TABLE WCR_CASING (
+        ID SERIAL PRIMARY KEY,
+        UWI VARCHAR(64) NOT NULL,
+        CASING_TYPE VARCHAR(255),
+        CASING_LINER_NAME VARCHAR(255),
+        CASING_START_DATE DATE,
+        CASING_TOP FLOAT,
+        CASING_BOTTOM FLOAT,
+        OUTER_DIAMETER FLOAT,
+        CASING_SHOE_LENGTH FLOAT,
+        FLOAT_COLLAR FLOAT,
+        MATERIAL_TYPE VARCHAR(64),
+        WEIGHT VARCHAR(64),
+        STEEL_GRADE VARCHAR(64),
+        REMARKS TEXT,
+        MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100),
+        MATCH_ID INTEGER
+    );
+
+    CREATE TABLE WCR_LOGSRECORD (
+        ID SERIAL PRIMARY KEY,
+        UWI VARCHAR(64) NOT NULL,
+        TOP FLOAT,
+        BOTTOM FLOAT,
+        LOG_RECORDED VARCHAR(255),
+        LOG_DATE VARCHAR(11),
+        LOGGED_BY VARCHAR(64),
+        MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100),
+        MATCH_ID INTEGER
+    );
+
+    CREATE TABLE WCR_DIRSRVY (
+        ID SERIAL PRIMARY KEY,
+        UWI VARCHAR(64),
+        MD FLOAT,
+        ANGLE_INCLINATION FLOAT,
+        AZIMUTH FLOAT,
+        NS FLOAT,
+        EW FLOAT,
+        NET_DRIFT FLOAT,
+        NET_DIRECTION_ANGLE FLOAT,
+        VERTICAL_SHORTENING FLOAT,
+        MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100),
+        MATCH_ID VARCHAR(100)
+    );
+
+    CREATE TABLE WCR_SWC (
+        ID SERIAL PRIMARY KEY,
+        UWI VARCHAR(64),
+        DEPTH FLOAT,
+        RECOVERED_LENGTH FLOAT,
+        LITHOLOGY VARCHAR(255),
+        LITHOLOGY_DESCRIPTION TEXT,
+        HCSHOW VARCHAR(255),
+        REMARKS VARCHAR(255),
+        MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100),
+        MATCH_ID INTEGER
+    );
+
+    CREATE TABLE WCR_HCSHOWS (
+        ID SERIAL PRIMARY KEY,
+        UWI VARCHAR(64),
+        TOP_DEPTH FLOAT,
+        BOTTOM_DEPTH FLOAT,
+        TOTAL_GAS VARCHAR(255),
+        LITHOLOGY VARCHAR(255),
+        HCSHOW VARCHAR(255),
+        MODEL VARCHAR(25),
+        INSERT_DATE DATE,
+        MATCH_PERCENT FLOAT,
+        VECTOR_IDS VARCHAR(100),
+        PAGE_NUMBERS VARCHAR(100),
+        MATCH_ID INTEGER
+    );
+    """
+
 def init_db():
     # Load the schema.sql file to initialize the DB
-    with open(os.path.join(BASE_DIR, "schema.sql"), "r") as f:
-        sql_script = f.read()
+    if IS_POSTGRES:
+        sql_script = get_postgres_schema()
+    else:
+        with open(os.path.join(BASE_DIR, "schema.sql"), "r") as f:
+            sql_script = f.read()
     
     if IS_POSTGRES:
         # For PostgreSQL, execute via SQLAlchemy connection
-        with engine.connect() as conn:
-            # Split by semicolon and execute each statement
-            statements = [s.strip() for s in sql_script.split(';') if s.strip()]
-            for statement in statements:
-                try:
-                    conn.execute(text(statement))
-                except Exception as e:
-                    # Table might already exist, continue
-                    pass
-            conn.commit()
+        try:
+            with engine.connect() as conn:
+                # Split by semicolon and execute each statement
+                statements = [s.strip() for s in sql_script.split(';') if s.strip()]
+                for statement in statements:
+                    try:
+                        conn.execute(text(statement))
+                    except Exception as e:
+                        # Table might already exist, continue
+                        print(f"Schema statement skipped: {e}")
+                conn.commit()
+        except Exception as e:
+            print(f"Database initialization error: {e}")
     else:
         # For SQLite, use sqlite3 directly
         DB_PATH = os.path.join(BASE_DIR, "oilgas.db")
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.executescript(sql_script)
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.executescript(sql_script)
+        except Exception as e:
+            print(f"SQLite initialization error: {e}")
 
 def get_table_schema(table_name: str):
     """Reflects the database to get strict column definitions."""
