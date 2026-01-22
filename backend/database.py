@@ -173,28 +173,54 @@ def init_db():
                 for statement in statements:
                     try:
                         conn.execute(text(statement))
+                        print(f"✓ Executed: {statement[:50]}...")
                     except Exception as e:
-                        # Table might already exist, continue
-                        print(f"Schema statement skipped: {e}")
+                        # Only skip if table already exists
+                        if "already exists" not in str(e).lower():
+                            print(f"✗ Error executing statement: {statement[:50]}... -> {str(e)}")
+                            raise  # Re-raise if it's not an "already exists" error
                 conn.commit()
+                print("✓ Database tables initialized successfully")
         except Exception as e:
-            print(f"Database initialization error: {e}")
+            print(f"✗ Database initialization error: {e}")
+            raise
     else:
         # For SQLite, use sqlite3 directly
         DB_PATH = os.path.join(BASE_DIR, "oilgas.db")
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.executescript(sql_script)
+                print("✓ SQLite database initialized successfully")
         except Exception as e:
-            print(f"SQLite initialization error: {e}")
+            print(f"✗ SQLite initialization error: {e}")
+            raise
+
 
 def get_table_schema(table_name: str):
     """Reflects the database to get strict column definitions."""
-    metadata.clear() # Clear cache to ensure fresh reflection
-    metadata.reflect(bind=engine)
-    if table_name not in metadata.tables:
-        raise ValueError(f"Table '{table_name}' not found in SQL schema.")
+    # Clear cache and re-reflect to get fresh data
+    metadata.clear()
     
-    table = metadata.tables[table_name]
-    # Return a dict of {column_name: type}
-    return {col.name: str(col.type) for col in table.columns}
+    # For fresh reflection, create a new connection
+    if IS_POSTGRES:
+        # Force a fresh connection for PostgreSQL
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        print(f"Available tables in database: {tables}")
+        
+        if table_name not in tables:
+            raise ValueError(f"Table '{table_name}' not found. Available tables: {tables}")
+        
+        # Get columns
+        columns = inspector.get_columns(table_name)
+        return {col['name']: str(col['type']) for col in columns}
+    else:
+        # SQLite
+        metadata.reflect(bind=engine)
+        if table_name not in metadata.tables:
+            raise ValueError(f"Table '{table_name}' not found in SQL schema.")
+        
+        table = metadata.tables[table_name]
+        return {col.name: str(col.type) for col in table.columns}
+
