@@ -38,6 +38,9 @@ allowed_origins = [
     "https://localhost:5173",
     "https://ongc-alpha.vercel.app",  # Your Vercel frontend
 ]
+
+# Add wildcard for Vercel preview deployments
+allow_origin_regex = r"https://.*\.vercel\.app"
 # Add production frontend URL if specified
 frontend_url = os.getenv("FRONTEND_URL")
 if frontend_url and frontend_url not in allowed_origins:
@@ -46,6 +49,7 @@ if frontend_url and frontend_url not in allowed_origins:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
