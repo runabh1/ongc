@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { SnippingTool } from './components/SnippingToolComponent';
 import { ResultsTable } from './components/ResultsTable';
-import { uploadFile, extractData, exportData, saveData, downloadTemplate, exportDataAsPdf } from './api';
+import { uploadFile, extractData, exportData, saveData, downloadTemplate, exportDataAsPdf, checkExistence } from './api';
 
 interface Extraction {
   id: number;
@@ -105,6 +105,33 @@ function App() {
     await exportDataAsPdf(extraction.sqlData, TABLE_MAP[extraction.label]);
   };
 
+  const handleCheckExistence = async (extraction: Extraction) => {
+    try {
+      const res = await checkExistence(extraction.sqlData, TABLE_MAP[extraction.label]);
+      
+      // Update the rows with status based on the response
+      const newSqlData = extraction.sqlData.map(row => {
+        // Simple matching logic: check if this row's content matches any in the 'exists' list
+        // We exclude internal fields (_status, etc) for comparison
+        const isExisting = res.exists.some((r: any) => {
+             const { _status, _errors, _db_status, ...cleanRow } = row;
+             const { _status: s2, _errors: e2, _db_status: d2, ...cleanRes } = r;
+             return JSON.stringify(cleanRow) === JSON.stringify(cleanRes);
+        });
+        
+        return { ...row, _db_status: isExisting ? 'EXISTING' : 'NEW' };
+      });
+      
+      setExtractions(prev => prev.map(ext => ext.id === extraction.id ? { ...ext, sqlData: newSqlData } : ext));
+      
+      const existCount = res.exists.length;
+      const newCount = res.new.length;
+      alert(`Check Complete:\n✅ ${existCount} records already in database\n🆕 ${newCount} new records to add`);
+    } catch (err: any) {
+      alert("Check failed: " + (err.response?.data?.detail || err.message));
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col bg-gray-50">
       <header className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm z-30">
@@ -194,6 +221,7 @@ function App() {
                       onExport={() => handleExport(ext)} 
                       onSave={() => handleSave(ext)}
                       onExportPdf={() => handleExportPdf(ext)}
+                      onCheckExistence={() => handleCheckExistence(ext)}
                     />
                   </div>
                 ))}

@@ -7,9 +7,10 @@ interface Props {
   onExport: () => void;
   onSave: () => void;
   onExportPdf: () => void;
+  onCheckExistence: () => void;
 }
 
-export const ResultsTable: React.FC<Props> = ({ data, rawData, schema, onExport, onSave, onExportPdf }) => {
+export const ResultsTable: React.FC<Props> = ({ data, rawData, schema, onExport, onSave, onExportPdf, onCheckExistence }) => {
   if ((!data || data.length === 0) && (!rawData || rawData.length === 0)) {
     return (
       <div className="p-4 bg-yellow-50 border border-yellow-200 rounded text-yellow-800 text-center">
@@ -80,6 +81,9 @@ export const ResultsTable: React.FC<Props> = ({ data, rawData, schema, onExport,
             Mapped Data
           </h3>
           <div className="flex gap-3">
+            <button onClick={onCheckExistence} className="inline-flex items-center px-3 py-1.5 border border-blue-200 text-sm font-medium rounded-md text-blue-700 bg-blue-50 hover:bg-blue-100 shadow-sm transition-colors">
+              🔍 Check Existence
+            </button>
             <button onClick={onSave} className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 shadow-sm transition-colors">
               Add to Database
             </button>
@@ -96,6 +100,7 @@ export const ResultsTable: React.FC<Props> = ({ data, rawData, schema, onExport,
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DB Status</th>
                 {schema.map(col => (
                   <th key={col} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                     {col}
@@ -108,6 +113,17 @@ export const ResultsTable: React.FC<Props> = ({ data, rawData, schema, onExport,
                 <tr key={idx} className={row._status === 'INVALID' ? 'bg-red-50' : 'bg-green-50'}>
                   <td className="px-4 py-3 whitespace-nowrap text-center">
                     {row._status === 'VALID' ? '✅' : '❌'}
+                  </td>
+                  <td className="px-4 py-3 whitespace-nowrap text-center">
+                    {row._db_status === 'EXISTING' ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                        IN DB
+                      </span>
+                    ) : row._db_status === 'NEW' ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                        NEW
+                      </span>
+                    ) : '-'}
                   </td>
                   {schema.map(col => {
                     return (

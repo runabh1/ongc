@@ -16,6 +16,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 import google.generativeai as genai
 
 from database import init_db, get_table_schema, engine
+from sqlalchemy import inspect
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -310,6 +311,71 @@ async def extract(
         "sql_data": result["data"],
         "schema": result["schema"]
     }
+
+@app.post("/check-existence")
+async def check_existence(
+    data: str = Form(...),
+    table_name: str = Form(...)
+):
+    try:
+        rows = json.loads(data)
+        if not rows:
+            return {"exists": [], "new": []}
+            
+        # Convert to DataFrame for easier handling
+        input_df = pd.DataFrame(rows)
+        # Drop internal columns
+        input_df = input_df.drop(columns=[c for c in input_df.columns if c.startswith("_")], errors='ignore')
+        
+        if input_df.empty:
+             return {"exists": [], "new": rows}
+
+        with engine.connect() as conn:
+            # Check if table exists
+            inspector = inspect(engine)
+            if not inspector.has_table(table_name):
+                return {"exists": [], "new": rows}
+
+            # Read existing data
+            # Optimization: If UWI is present, filter by UWI to reduce data load
+            query = f"SELECT * FROM {table_name}"
+            if "UWI" in input_df.columns:
+                unique_uwis = [str(u) for u in input_df["UWI"].unique() if u]
+                if unique_uwis:
+                    uwis_str = "', '".join(unique_uwis)
+                    query += f" WHERE \"UWI\" IN ('{uwis_str}')"
+            
+            existing_df = pd.read_sql(query, conn)
+            
+        if existing_df.empty:
+            return {"exists": [], "new": rows}
+
+        # Identify common columns for comparison
+        common_cols = list(set(existing_df.columns) & set(input_df.columns))
+        if not common_cols:
+             return {"exists": [], "new": rows}
+
+        # Create signatures for comparison (concat all common values)
+        existing_sigs = existing_df[common_cols].astype(str).agg('-'.join, axis=1)
+        input_sigs = input_df[common_cols].astype(str).agg('-'.join, axis=1)
+        
+        exists_mask = input_sigs.isin(existing_sigs)
+        
+        exists_rows = []
+        new_rows = []
+        
+        for i, is_exist in enumerate(exists_mask):
+            if is_exist:
+                exists_rows.append(rows[i])
+            else:
+                new_rows.append(rows[i])
+                
+        return {"exists": exists_rows, "new": new_rows}
+
+    except Exception as e:
+        print(f"Check Error: {e}")
+        # Fallback: assume all new if check fails
+        return {"exists": [], "new": json.loads(data)}
 
 @app.post("/save")
 async def save_to_db(

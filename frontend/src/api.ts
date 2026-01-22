@@ -21,6 +21,14 @@ export const extractData = async (filename: string, selection: any) => {
   return response.data;
 };
 
+export const checkExistence = async (data: any[], tableName: string) => {
+  const formData = new FormData();
+  formData.append('data', JSON.stringify(data));
+  formData.append('table_name', tableName);
+  const response = await axios.post(`${API_URL}/check-existence`, formData);
+  return response.data;
+};
+
 export const saveData = async (data: any[], tableName: string) => {
   const formData = new FormData();
   formData.append('data', JSON.stringify(data));
