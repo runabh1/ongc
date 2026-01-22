@@ -135,8 +135,8 @@ export const ResultsTable: React.FC<Props> = ({ data, rawData, schema, onExport,
         <div className="p-4 bg-red-50 border border-red-200 rounded shadow">
           <h3 className="font-bold text-lg mb-2 text-red-700">3. Missing Values Summary</h3>
           <ul className="list-disc list-inside text-red-800">
-            {uniqueMissing.map((msg: string, i: number) => (
-              <li key={i}>{msg.replace("Missing: ", "")} column is missing in one or more rows.</li>
+            {uniqueMissing.map((msg, i) => (
+              <li key={i}>{String(msg).replace("Missing: ", "")} column is missing in one or more rows.</li>
             ))}
           </ul>
         </div>
