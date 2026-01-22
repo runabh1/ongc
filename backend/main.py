@@ -204,7 +204,19 @@ def validate_data(data: List[Dict], table_name: str):
     try:
         schema = get_table_schema(table_name)
     except ValueError as e:
-        return {"error": f"Table {table_name} not defined in SQL: {str(e)}"}
+        # Table doesn't exist, try to initialize the database
+        print(f"Table {table_name} not found, attempting to initialize database...")
+        try:
+            init_db()
+            # Try again after initialization
+            schema = get_table_schema(table_name)
+        except Exception as init_err:
+            print(f"Database initialization failed: {init_err}")
+            # Fallback: Create schema from extracted data
+            if not data:
+                return {"error": "No data to validate"}
+            schema = {k: "TEXT" for k in data[0].keys() if not k.startswith("_")}
+            print(f"Using fallback schema with {len(schema)} columns")
     except Exception as e:
         print(f"Schema reflection error for {table_name}: {str(e)}")
         # Fallback: Create schema from extracted data
