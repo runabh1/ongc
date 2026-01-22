@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = 'http://127.0.0.1:8000';
+// Use the environment variable if available, otherwise fallback to localhost
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
