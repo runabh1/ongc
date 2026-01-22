@@ -36,7 +36,7 @@ allowed_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
     "https://localhost:5173",
-    "https://ongc-yb42.vercel.app",  # Your Vercel frontend
+    "https://ongc-alpha.vercel.app",  # Your Vercel frontend
 ]
 # Add production frontend URL if specified
 frontend_url = os.getenv("FRONTEND_URL")
