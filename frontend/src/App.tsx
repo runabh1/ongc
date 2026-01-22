@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { SnippingTool } from './components/SnippingTool';
+import { SnippingTool } from './components/SnippingToolComponent';
 import { ResultsTable } from './components/ResultsTable';
 import { uploadFile, extractData, exportData, saveData, downloadTemplate, exportDataAsPdf } from './api';
 
