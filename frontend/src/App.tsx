@@ -44,9 +44,19 @@ function App() {
         const res = await uploadFile(f);
         setUploadedName(res.filename);
         setFile(f); // Only show UI after successful upload
-      } catch (err) {
+      } catch (err: any) {
         console.error("Upload failed", err);
-        alert("Failed to upload file. Please try again.");
+        let msg = "Failed to upload file.";
+        if (err.response) {
+          // Server responded with a status code (e.g., 404, 500, 413)
+          msg += ` Server Error: ${err.response.status} ${err.response.statusText}`;
+        } else if (err.request) {
+          // Request was made but no response (e.g., Network Error, Server Sleeping)
+          msg += " No response from server. The backend might be waking up (wait 30s) or is unreachable.";
+        } else {
+          msg += ` ${err.message}`;
+        }
+        alert(msg);
       } finally {
         setIsUploading(false);
       }
