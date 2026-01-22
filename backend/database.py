@@ -1,13 +1,23 @@
 import sqlite3
 import os
-from sqlalchemy import create_engine, MetaData
+from sqlalchemy import create_engine, MetaData, text
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "oilgas.db")
 
-# Using SQLite for easy local setup.
-DB_URL = f"sqlite:///{DB_PATH}"
-engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
+# Support both SQLite (local) and PostgreSQL (production)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    # Production: Use PostgreSQL from environment variable
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    IS_POSTGRES = True
+else:
+    # Development: Use SQLite
+    DB_PATH = os.path.join(BASE_DIR, "oilgas.db")
+    DB_URL = f"sqlite:///{DB_PATH}"
+    engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
+    IS_POSTGRES = False
+
 metadata = MetaData()
 
 def init_db():
@@ -15,8 +25,23 @@ def init_db():
     with open(os.path.join(BASE_DIR, "schema.sql"), "r") as f:
         sql_script = f.read()
     
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.executescript(sql_script)
+    if IS_POSTGRES:
+        # For PostgreSQL, execute via SQLAlchemy connection
+        with engine.connect() as conn:
+            # Split by semicolon and execute each statement
+            statements = [s.strip() for s in sql_script.split(';') if s.strip()]
+            for statement in statements:
+                try:
+                    conn.execute(text(statement))
+                except Exception as e:
+                    # Table might already exist, continue
+                    pass
+            conn.commit()
+    else:
+        # For SQLite, use sqlite3 directly
+        DB_PATH = os.path.join(BASE_DIR, "oilgas.db")
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.executescript(sql_script)
 
 def get_table_schema(table_name: str):
     """Reflects the database to get strict column definitions."""

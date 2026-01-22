@@ -14,8 +14,12 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 import google.generativeai as genai
+from dotenv import load_dotenv
 
 from database import init_db, get_table_schema, engine
+
+# Load environment variables from .env file in development
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,10 +31,20 @@ app = FastAPI(title="Well Completion Extractor", lifespan=lifespan)
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# CORS Setup
+# CORS Setup - Allow Vercel frontend and localhost for development
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://localhost:5173",
+]
+# Add production frontend URL if specified
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    allowed_origins.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -402,6 +416,185 @@ async def generate_template(table_name: str = Form(...)):
         
         doc.build(elements)
         return FileResponse(output_path, filename=f"{table_name}_template.pdf")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== NEW: DATABASE COMPARISON ENDPOINTS ==========
+
+@app.post("/check-existence")
+async def check_existence(data: str = Form(...), table_name: str = Form(...)):
+    """Check if extracted data already exists in the database"""
+    try:
+        rows = json.loads(data)
+        if not rows:
+            return {"exists": [], "missing": rows, "message": "No data to check"}
+        
+        table_label = LABEL_TO_TABLE.get(table_name, table_name)
+        
+        # Get table schema
+        schema = get_table_schema(table_label)
+        
+        # Primary keys to check
+        from sqlalchemy import inspect, select
+        insp = inspect(engine)
+        pk_columns = insp.get_pk_constraint(table_label)['constrained_columns']
+        
+        exists_list = []
+        missing_list = []
+        
+        with engine.connect() as conn:
+            for row in rows:
+                # Build WHERE clause for primary keys
+                filter_dict = {col: row.get(col.upper()) or row.get(col) for col in pk_columns}
+                
+                # Query database
+                from sqlalchemy import text
+                where_clause = " AND ".join([f"{col} = '{filter_dict[col]}'" for col in pk_columns if filter_dict[col]])
+                
+                if where_clause:
+                    query = f"SELECT * FROM {table_label} WHERE {where_clause}"
+                    result = conn.execute(text(query))
+                    db_row = result.fetchone()
+                    
+                    if db_row:
+                        exists_list.append({"pdf_data": row, "db_data": dict(db_row._mapping)})
+                    else:
+                        missing_list.append(row)
+                else:
+                    missing_list.append(row)
+        
+        return {
+            "exists": exists_list,
+            "missing": missing_list,
+            "total_checked": len(rows),
+            "found_count": len(exists_list),
+            "missing_count": len(missing_list)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/find-missing-values")
+async def find_missing_values(data: str = Form(...), table_name: str = Form(...)):
+    """Find missing/empty values in extracted data"""
+    try:
+        rows = json.loads(data)
+        if not rows:
+            return {"missing_values": {}}
+        
+        table_label = LABEL_TO_TABLE.get(table_name, table_name)
+        schema = get_table_schema(table_label)
+        
+        missing_analysis = {}
+        
+        for idx, row in enumerate(rows):
+            row_missing = {}
+            for col in schema.keys():
+                col_upper = col.upper()
+                col_lower = col.lower()
+                
+                value = row.get(col_upper) or row.get(col_lower) or row.get(col)
+                
+                if not value or str(value).strip() == "":
+                    row_missing[col] = "MISSING"
+            
+            if row_missing:
+                missing_analysis[f"row_{idx}"] = row_missing
+        
+        return {
+            "table": table_label,
+            "total_rows": len(rows),
+            "rows_with_missing": len(missing_analysis),
+            "missing_details": missing_analysis
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/scan-pdf-matches")
+async def scan_pdf_matches(file: UploadFile = File(...), table_name: str = Form(...)):
+    """Scan entire PDF and find all matches with database"""
+    try:
+        # Save file
+        filename = file.filename
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+        
+        table_label = LABEL_TO_TABLE.get(table_name, table_name)
+        
+        # Get all data from PDF
+        all_pdf_data = []
+        with pdfplumber.open(file_path) as pdf:
+            for page_idx, page in enumerate(pdf.pages):
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        if not table:
+                            continue
+                        header_row = table[0]
+                        valid_headers = {}
+                        for idx, h in enumerate(header_row):
+                            if h:
+                                valid_headers[idx] = str(h).lower().replace(" ", "_").replace(".", "")
+                        
+                        for row in table[1:]:
+                            row_data = {}
+                            for idx, val in enumerate(row):
+                                if idx in valid_headers:
+                                    row_data[valid_headers[idx]] = val
+                            if row_data:
+                                row_data['_page'] = page_idx + 1
+                                all_pdf_data.append(row_data)
+        
+        # Compare with database
+        schema = get_table_schema(table_label)
+        from sqlalchemy import inspect
+        insp = inspect(engine)
+        pk_columns = insp.get_pk_constraint(table_label)['constrained_columns']
+        
+        matches = []
+        no_matches = []
+        
+        with engine.connect() as conn:
+            for pdf_row in all_pdf_data:
+                filter_dict = {col: pdf_row.get(col.upper()) or pdf_row.get(col) for col in pk_columns}
+                where_clause = " AND ".join([f"{col} = '{filter_dict[col]}'" for col in pk_columns if filter_dict[col]])
+                
+                if where_clause:
+                    from sqlalchemy import text
+                    query = f"SELECT * FROM {table_label} WHERE {where_clause}"
+                    result = conn.execute(text(query))
+                    db_row = result.fetchone()
+                    
+                    if db_row:
+                        matches.append({
+                            "page": pdf_row.get('_page'),
+                            "pdf_data": pdf_row,
+                            "db_data": dict(db_row._mapping),
+                            "status": "FOUND IN DATABASE"
+                        })
+                    else:
+                        no_matches.append({
+                            "page": pdf_row.get('_page'),
+                            "data": pdf_row,
+                            "status": "NOT IN DATABASE"
+                        })
+                else:
+                    no_matches.append({
+                        "page": pdf_row.get('_page'),
+                        "data": pdf_row,
+                        "status": "INCOMPLETE DATA"
+                    })
+        
+        return {
+            "filename": filename,
+            "table": table_label,
+            "total_records_found": len(all_pdf_data),
+            "database_matches": len(matches),
+            "no_matches": len(no_matches),
+            "matches": matches,
+            "no_matches_data": no_matches
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

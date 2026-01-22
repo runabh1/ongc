@@ -9,4 +9,4 @@ psycopg2-binary
 reportlab
 google-generativeai
 gunicorn
-# For demo purposes using sqlite, but production uses postgres
+python-dotenv
