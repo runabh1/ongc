@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Use the environment variable if available, otherwise fallback to localhost
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://ongc-t136.onrender.com';
 
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
