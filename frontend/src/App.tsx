@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SnippingTool } from './components/SnippingToolComponent';
 import { ResultsTable } from './components/ResultsTable';
-import DatabaseComparison from './components/DatabaseComparison';
 import { uploadFile, extractData, exportData, saveData, downloadTemplate, exportDataAsPdf } from './api';
 
 interface Extraction {
@@ -195,11 +194,6 @@ function App() {
                       onExport={() => handleExport(ext)} 
                       onSave={() => handleSave(ext)}
                       onExportPdf={() => handleExportPdf(ext)}
-                    />
-                    <DatabaseComparison
-                      tableName={TABLE_MAP[ext.label]}
-                      extractedData={ext.sqlData}
-                      selectedFile={file}
                     />
                   </div>
                 ))}

@@ -72,31 +72,3 @@ export const downloadTemplate = async (tableName: string) => {
   document.body.appendChild(link);
   link.click();
 };
-
-// ===== NEW: DATABASE COMPARISON FUNCTIONS =====
-
-export const checkDataExistence = async (data: any[], tableName: string) => {
-  const formData = new FormData();
-  formData.append('data', JSON.stringify(data));
-  formData.append('table_name', tableName);
-  const response = await axios.post(`${API_URL}/check-existence`, formData);
-  return response.data;
-};
-
-export const findMissingValues = async (data: any[], tableName: string) => {
-  const formData = new FormData();
-  formData.append('data', JSON.stringify(data));
-  formData.append('table_name', tableName);
-  const response = await axios.post(`${API_URL}/find-missing-values`, formData);
-  return response.data;
-};
-
-export const scanPdfMatches = async (file: File, tableName: string) => {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('table_name', tableName);
-  const response = await axios.post(`${API_URL}/scan-pdf-matches`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  });
-  return response.data;
-};
