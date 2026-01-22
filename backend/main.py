@@ -203,8 +203,15 @@ IGNORED_COLUMNS = {
 def validate_data(data: List[Dict], table_name: str):
     try:
         schema = get_table_schema(table_name)
-    except ValueError:
-        return {"error": f"Table {table_name} not defined in SQL."}
+    except ValueError as e:
+        return {"error": f"Table {table_name} not defined in SQL: {str(e)}"}
+    except Exception as e:
+        print(f"Schema reflection error for {table_name}: {str(e)}")
+        # Fallback: Create schema from extracted data
+        if not data:
+            return {"error": "No data to validate"}
+        schema = {k: "TEXT" for k in data[0].keys() if not k.startswith("_")}
+        print(f"Using fallback schema with {len(schema)} columns")
 
     validated_rows = []
     
@@ -278,53 +285,59 @@ async def extract(
     filename: str = Form(...),
     selection: str = Form(...)
 ):
-    sel_dict = json.loads(selection)
-    sel_obj = RegionSelection(**sel_dict)
-    
-    # Security: Ensure filename is just the name, not a path
-    safe_filename = os.path.basename(filename)
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
-    
-    table_name = LABEL_TO_TABLE.get(sel_obj.label)
-    if not table_name:
-        raise HTTPException(status_code=400, detail="Label not mapped to SQL table")
+    try:
+        sel_dict = json.loads(selection)
+        sel_obj = RegionSelection(**sel_dict)
         
-    # 1. Extract
-    if sel_obj.use_ai:
-        # AI Extraction Path
-        with pdfplumber.open(file_path) as pdf:
-            page = pdf.pages[sel_obj.page_number - 1]
-            width, height = page.width, page.height
-            x0 = max(0, min(sel_obj.x_pct * width, width))
-            top = max(0, min(sel_obj.y_pct * height, height))
-            x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
-            bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
+        # Security: Ensure filename is just the name, not a path
+        safe_filename = os.path.basename(filename)
+        file_path = os.path.join(UPLOAD_DIR, safe_filename)
+        
+        table_name = LABEL_TO_TABLE.get(sel_obj.label)
+        if not table_name:
+            raise HTTPException(status_code=400, detail="Label not mapped to SQL table")
             
-            cropped = page.crop((x0, top, x1, bottom))
-            text_content = cropped.extract_text()
-            
-        if not text_content or len(text_content.strip()) < 5:
-             return {"message": "Region is empty or unreadable", "raw_data": [], "sql_data": [], "schema": []}
-             
-        raw_data = extract_with_gemini(text_content, table_name)
-    else:
-        # Standard Extraction Path
-        raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
-    
-    if not raw_data:
-        return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
+        # 1. Extract
+        if sel_obj.use_ai:
+            # AI Extraction Path
+            with pdfplumber.open(file_path) as pdf:
+                page = pdf.pages[sel_obj.page_number - 1]
+                width, height = page.width, page.height
+                x0 = max(0, min(sel_obj.x_pct * width, width))
+                top = max(0, min(sel_obj.y_pct * height, height))
+                x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
+                bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
+                
+                cropped = page.crop((x0, top, x1, bottom))
+                text_content = cropped.extract_text()
+                
+            if not text_content or len(text_content.strip()) < 5:
+                 return {"message": "Region is empty or unreadable", "raw_data": [], "sql_data": [], "schema": []}
+                 
+            raw_data = extract_with_gemini(text_content, table_name)
+        else:
+            # Standard Extraction Path
+            raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
+        
+        if not raw_data:
+            return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
 
-    # 2. Validate
-    result = validate_data(raw_data, table_name)
-    
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
-    
-    return {
-        "raw_data": raw_data,
-        "sql_data": result["data"],
-        "schema": result["schema"]
-    }
+        # 2. Validate
+        result = validate_data(raw_data, table_name)
+        
+        if "error" in result:
+            return {"error": result["error"], "raw_data": raw_data, "sql_data": [], "schema": []}
+        
+        return {
+            "raw_data": raw_data,
+            "sql_data": result["data"],
+            "schema": result["schema"]
+        }
+    except Exception as e:
+        print(f"Extract endpoint error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
 
 @app.post("/save")
 async def save_to_db(
