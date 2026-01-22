@@ -155,13 +155,6 @@ def get_postgres_schema():
         MATCH_ID INTEGER
     );
     """
-        INSERT_DATE DATE,
-        MATCH_PERCENT FLOAT,
-        VECTOR_IDS VARCHAR(100),
-        PAGE_NUMBERS VARCHAR(100),
-        MATCH_ID INTEGER
-    );
-    """
 
 def init_db():
     # Load the schema.sql file to initialize the DB
