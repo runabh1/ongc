@@ -14,12 +14,8 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 import google.generativeai as genai
-from dotenv import load_dotenv
 
 from database import init_db, get_table_schema, engine
-
-# Load environment variables from .env file in development
-load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,25 +27,10 @@ app = FastAPI(title="Well Completion Extractor", lifespan=lifespan)
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# CORS Setup - Allow Vercel frontend and localhost for development
-allowed_origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "https://localhost:5173",
-    "https://ongc-alpha.vercel.app",  # Your Vercel frontend
-]
-
-# Add wildcard for Vercel preview deployments
-allow_origin_regex = r"https://.*\.vercel\.app"
-# Add production frontend URL if specified
-frontend_url = os.getenv("FRONTEND_URL")
-if frontend_url and frontend_url not in allowed_origins:
-    allowed_origins.append(frontend_url)
-
+# CORS Setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_origin_regex=allow_origin_regex,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,18 +56,18 @@ class RegionSelection(BaseModel):
 
 # --- CONFIGURATION ---
 LABEL_TO_TABLE = {
-    "WELL_HEADER": "WCR_WELLHEAD",
-    "WCR_WELLHEAD": "WCR_WELLHEAD",
-    "CASING": "WCR_CASING",
-    "WCR_CASING": "WCR_CASING",
-    "LOGS": "WCR_LOGSRECORD",
-    "WCR_LOGSRECORD": "WCR_LOGSRECORD",
-    "DIRSRVY": "WCR_DIRSRVY",
-    "WCR_DIRSRVY": "WCR_DIRSRVY",
-    "SWC": "WCR_SWC",
-    "WCR_SWC": "WCR_SWC",
-    "HCSHOWS": "WCR_HCSHOWS",
-    "WCR_HCSHOWS": "WCR_HCSHOWS"
+    "WELL_HEADER": "wcr_wellhead",
+    "WCR_WELLHEAD": "wcr_wellhead",
+    "CASING": "wcr_casing",
+    "WCR_CASING": "wcr_casing",
+    "LOGS": "wcr_logsrecord",
+    "WCR_LOGSRECORD": "wcr_logsrecord",
+    "DIRSRVY": "wcr_dirsrvy",
+    "WCR_DIRSRVY": "wcr_dirsrvy",
+    "SWC": "wcr_swc",
+    "WCR_SWC": "wcr_swc",
+    "HCSHOWS": "wcr_hcshows",
+    "WCR_HCSHOWS": "wcr_hcshows"
 }
 
 # --- LOGIC ---
@@ -207,29 +188,8 @@ IGNORED_COLUMNS = {
 def validate_data(data: List[Dict], table_name: str):
     try:
         schema = get_table_schema(table_name)
-        print(f"✓ Successfully loaded schema for table {table_name} with {len(schema)} columns")
-    except ValueError as e:
-        # Table doesn't exist, try to initialize the database
-        print(f"✗ Table {table_name} not found, attempting to initialize database...")
-        try:
-            init_db()
-            # Try again after initialization
-            schema = get_table_schema(table_name)
-            print(f"✓ After init_db: loaded schema for {table_name} with {len(schema)} columns")
-        except Exception as init_err:
-            print(f"✗ Database initialization failed: {init_err}")
-            # Fallback: Create schema from extracted data
-            if not data:
-                return {"error": "No data to validate"}
-            schema = {k: "TEXT" for k in data[0].keys() if not k.startswith("_")}
-            print(f"⚠ Using fallback schema with {len(schema)} columns from extracted data")
-    except Exception as e:
-        print(f"✗ Schema reflection error for {table_name}: {str(e)}")
-        # Fallback: Create schema from extracted data
-        if not data:
-            return {"error": "No data to validate"}
-        schema = {k: "TEXT" for k in data[0].keys() if not k.startswith("_")}
-        print(f"⚠ Using fallback schema with {len(schema)} columns from extracted data")
+    except ValueError:
+        return {"error": f"Table {table_name} not defined in SQL."}
 
     validated_rows = []
     
@@ -245,7 +205,6 @@ def validate_data(data: List[Dict], table_name: str):
     
     # Filter schema for display/validation (exclude system columns)
     display_columns = [k for k in schema.keys() if k.upper() not in IGNORED_COLUMNS]
-    print(f"Display columns for {table_name}: {len(display_columns)} columns - {display_columns[:5]}...")
     
     for row in data:
         row_status = "VALID"
@@ -284,14 +243,10 @@ def validate_data(data: List[Dict], table_name: str):
                 errors.append(f"Missing: {col}")
                 row_status = "INVALID"
         
-        if errors:
-            print(f"Row validation for {table_name}: {len(errors)} errors - {errors[:3]}...")
-        
         clean_row["_status"] = row_status
         clean_row["_errors"] = "; ".join(errors)
         validated_rows.append(clean_row)
         
-    print(f"✓ Validation complete for {table_name}: {len(validated_rows)} rows, {sum(1 for r in validated_rows if r.get('_status') == 'INVALID')} invalid")
     return {"schema": display_columns, "data": validated_rows}
 
 # --- ENDPOINTS ---
@@ -308,59 +263,53 @@ async def extract(
     filename: str = Form(...),
     selection: str = Form(...)
 ):
-    try:
-        sel_dict = json.loads(selection)
-        sel_obj = RegionSelection(**sel_dict)
+    sel_dict = json.loads(selection)
+    sel_obj = RegionSelection(**sel_dict)
+    
+    # Security: Ensure filename is just the name, not a path
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+    
+    table_name = LABEL_TO_TABLE.get(sel_obj.label)
+    if not table_name:
+        raise HTTPException(status_code=400, detail="Label not mapped to SQL table")
         
-        # Security: Ensure filename is just the name, not a path
-        safe_filename = os.path.basename(filename)
-        file_path = os.path.join(UPLOAD_DIR, safe_filename)
-        
-        table_name = LABEL_TO_TABLE.get(sel_obj.label)
-        if not table_name:
-            raise HTTPException(status_code=400, detail="Label not mapped to SQL table")
+    # 1. Extract
+    if sel_obj.use_ai:
+        # AI Extraction Path
+        with pdfplumber.open(file_path) as pdf:
+            page = pdf.pages[sel_obj.page_number - 1]
+            width, height = page.width, page.height
+            x0 = max(0, min(sel_obj.x_pct * width, width))
+            top = max(0, min(sel_obj.y_pct * height, height))
+            x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
+            bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
             
-        # 1. Extract
-        if sel_obj.use_ai:
-            # AI Extraction Path
-            with pdfplumber.open(file_path) as pdf:
-                page = pdf.pages[sel_obj.page_number - 1]
-                width, height = page.width, page.height
-                x0 = max(0, min(sel_obj.x_pct * width, width))
-                top = max(0, min(sel_obj.y_pct * height, height))
-                x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
-                bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
-                
-                cropped = page.crop((x0, top, x1, bottom))
-                text_content = cropped.extract_text()
-                
-            if not text_content or len(text_content.strip()) < 5:
-                 return {"message": "Region is empty or unreadable", "raw_data": [], "sql_data": [], "schema": []}
-                 
-            raw_data = extract_with_gemini(text_content, table_name)
-        else:
-            # Standard Extraction Path
-            raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
-        
-        if not raw_data:
-            return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
+            cropped = page.crop((x0, top, x1, bottom))
+            text_content = cropped.extract_text()
+            
+        if not text_content or len(text_content.strip()) < 5:
+             return {"message": "Region is empty or unreadable", "raw_data": [], "sql_data": [], "schema": []}
+             
+        raw_data = extract_with_gemini(text_content, table_name)
+    else:
+        # Standard Extraction Path
+        raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
+    
+    if not raw_data:
+        return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
 
-        # 2. Validate
-        result = validate_data(raw_data, table_name)
-        
-        if "error" in result:
-            return {"error": result["error"], "raw_data": raw_data, "sql_data": [], "schema": []}
-        
-        return {
-            "raw_data": raw_data,
-            "sql_data": result["data"],
-            "schema": result["schema"]
-        }
-    except Exception as e:
-        print(f"Extract endpoint error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
+    # 2. Validate
+    result = validate_data(raw_data, table_name)
+    
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    
+    return {
+        "raw_data": raw_data,
+        "sql_data": result["data"],
+        "schema": result["schema"]
+    }
 
 @app.post("/save")
 async def save_to_db(
@@ -455,6 +404,8 @@ async def generate_template(table_name: str = Form(...)):
         return FileResponse(output_path, filename=f"{table_name}_template.pdf")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/export-pdf")
 async def export_pdf(data: str = Form(...), table_name: str = Form(...)):
     """Exports extraction results to a PDF report"""
     rows = json.loads(data)

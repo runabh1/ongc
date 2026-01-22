@@ -12,18 +12,18 @@ interface Extraction {
 }
 
 const TABLE_MAP: Record<string, string> = {
-  "WELL_HEADER": "WCR_WELLHEAD",
-  "WCR_WELLHEAD": "WCR_WELLHEAD",
-  "CASING": "WCR_CASING",
-  "WCR_CASING": "WCR_CASING",
-  "LOGS": "WCR_LOGSRECORD",
-  "WCR_LOGSRECORD": "WCR_LOGSRECORD",
-  "DIRSRVY": "WCR_DIRSRVY",
-  "WCR_DIRSRVY": "WCR_DIRSRVY",
-  "SWC": "WCR_SWC",
-  "WCR_SWC": "WCR_SWC",
-  "HCSHOWS": "WCR_HCSHOWS",
-  "WCR_HCSHOWS": "WCR_HCSHOWS"
+  "WELL_HEADER": "wcr_wellhead",
+  "WCR_WELLHEAD": "wcr_wellhead",
+  "CASING": "wcr_casing",
+  "WCR_CASING": "wcr_casing",
+  "LOGS": "wcr_logsrecord",
+  "WCR_LOGSRECORD": "wcr_logsrecord",
+  "DIRSRVY": "wcr_dirsrvy",
+  "WCR_DIRSRVY": "wcr_dirsrvy",
+  "SWC": "wcr_swc",
+  "WCR_SWC": "wcr_swc",
+  "HCSHOWS": "wcr_hcshows",
+  "WCR_HCSHOWS": "wcr_hcshows"
 };
 
 function App() {

@@ -224,6 +224,9 @@ def init_db():
 
 def get_table_schema(table_name: str):
     """Reflects the database to get strict column definitions."""
+    # Convert to lowercase for PostgreSQL (which stores unquoted identifiers as lowercase)
+    table_name_normalized = table_name.lower()
+    
     # Clear cache and re-reflect to get fresh data
     metadata.clear()
     
@@ -235,12 +238,14 @@ def get_table_schema(table_name: str):
         tables = inspector.get_table_names()
         print(f"Available tables in database: {tables}")
         
-        if table_name not in tables:
+        if table_name_normalized not in tables:
             raise ValueError(f"Table '{table_name}' not found. Available tables: {tables}")
         
         # Get columns
-        columns = inspector.get_columns(table_name)
-        return {col['name']: str(col['type']) for col in columns}
+        columns = inspector.get_columns(table_name_normalized)
+        schema_dict = {col['name']: str(col['type']) for col in columns}
+        print(f"✓ Loaded schema for {table_name}: {len(schema_dict)} columns")
+        return schema_dict
     else:
         # SQLite
         metadata.reflect(bind=engine)
