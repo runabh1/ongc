@@ -2,10 +2,12 @@ import React, { useState, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
 // Configure PDF Worker
-pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
+if (typeof window !== 'undefined') {
+  const workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+}
 
 interface SnippingToolProps {
   file: File;
