@@ -284,10 +284,14 @@ def validate_data(data: List[Dict], table_name: str):
                 errors.append(f"Missing: {col}")
                 row_status = "INVALID"
         
+        if errors:
+            print(f"Row validation for {table_name}: {len(errors)} errors - {errors[:3]}...")
+        
         clean_row["_status"] = row_status
         clean_row["_errors"] = "; ".join(errors)
         validated_rows.append(clean_row)
         
+    print(f"✓ Validation complete for {table_name}: {len(validated_rows)} rows, {sum(1 for r in validated_rows if r.get('_status') == 'INVALID')} invalid")
     return {"schema": display_columns, "data": validated_rows}
 
 # --- ENDPOINTS ---
