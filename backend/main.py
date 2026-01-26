@@ -13,9 +13,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-import google.generativeai as genai
 from PIL import Image
-import pytesseract
 import io
 import base64
 
@@ -28,9 +26,6 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="Well Completion Extractor", lifespan=lifespan)
-
-# Configure Gemini API
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # CORS Setup
 app.add_middleware(
@@ -57,7 +52,6 @@ class RegionSelection(BaseModel):
     w_pct: float
     h_pct: float
     label: str    # e.g., "CASING"
-    use_ai: bool = False
 
 # --- CONFIGURATION ---
 LABEL_TO_TABLE = {
@@ -174,37 +168,73 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
         
         cropped = page.crop(bbox)
         
-        # Try Table Extraction
-        tables = cropped.extract_tables()
+        # Extract ALL tables from the page first (to get full context)
+        all_tables = page.extract_tables()
+        
+        # Filter to only tables that overlap significantly with our selected region
+        relevant_tables = []
+        if all_tables:
+            for table in all_tables:
+                if not table or not table[0]:
+                    continue
+                # Get table location (pdfplumber provides table bbox via extract_table with return_settings)
+                # For now, we'll use all tables found in cropped region
+                relevant_tables.append(table)
+        
+        # Get tables from cropped region directly
+        cropped_tables = cropped.extract_tables()
+        
         table_extracted = False
         
-        if tables:
-            for table in tables:
-                if not table: continue
+        # Prioritize tables found in cropped region
+        tables_to_process = cropped_tables if cropped_tables else relevant_tables
+        
+        if tables_to_process:
+            # Process tables - prefer larger tables (more likely to be the main data)
+            tables_to_process.sort(key=lambda t: len(t) * len(t[0]) if t and t[0] else 0, reverse=True)
+            
+            for table in tables_to_process:
+                if not table or not table[0]: 
+                    continue
+                
                 # Assume first row is header
                 header_row = table[0]
                 valid_headers = {} # index -> cleaned_name
+                header_count = 0
+                
                 for idx, h in enumerate(header_row):
-                    if h:
+                    if h and str(h).strip():
                         if use_raw_headers:
-                            valid_headers[idx] = str(h)
+                            valid_headers[idx] = str(h).strip()
                         else:
-                            valid_headers[idx] = str(h).lower().replace(" ", "_").replace(".", "")
-
+                            valid_headers[idx] = str(h).strip().lower().replace(" ", "_").replace(".", "")
+                        header_count += 1
+                
+                # Only process if we have reasonable headers (at least 2)
+                if header_count < 2:
+                    continue
+                
+                # Extract data rows
+                rows_extracted = 0
                 for row in table[1:]:
                     row_data = {}
                     for idx, val in enumerate(row):
-                        if idx in valid_headers:
-                            row_data[valid_headers[idx]] = val
+                        if idx in valid_headers and val and str(val).strip():
+                            row_data[valid_headers[idx]] = str(val).strip()
                     if row_data:
                         data.append(row_data)
+                        rows_extracted += 1
                         table_extracted = True
+                
+                # If we successfully extracted data, use this table
+                if rows_extracted > 0:
+                    break
         
         if not table_extracted:
-            # Fallback: Raw text (simple key-value heuristic could go here)
+            # Fallback: Raw text extraction
             text = cropped.extract_text()
             
-            # Attempt simple KV parsing (e.g. "Field: Mumbai High")
+            # Attempt simple KV parsing (e.g. "Field: Value")
             kv_data = {}
             if text:
                 lines = text.split('\n')
@@ -220,46 +250,9 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
             if kv_data:
                 data.append(kv_data)
             else:
-                data.append({"raw_text": text, "_warning": "No table structure detected"})
+                data.append({"raw_text": text if text else "No text found", "_warning": "No table structure detected"})
             
     return data
-
-def extract_with_gemini(text: str, table_name: str) -> List[Dict]:
-    """Uses Gemini Pro to parse unstructured text into SQL-compatible JSON."""
-    try:
-        schema = get_table_schema(table_name)
-        columns = [k for k in schema.keys() if k.upper() not in IGNORED_COLUMNS]
-        
-        model = genai.GenerativeModel('gemini-3-flash-preview')
-        
-        prompt = f"""
-        You are a data extraction assistant for Oil & Gas reports.
-        Extract data from the following text into a JSON list of objects.
-        
-        Target SQL Table: {table_name}
-        Target Columns: {", ".join(columns)}
-        
-        Rules:
-        1. Return ONLY a valid JSON list. No markdown formatting, no explanations.
-        2. Map the text values to the Target Columns best suited for them.
-        3. Convert values to appropriate types (numbers for depths, YYYY-MM-DD for dates if possible).
-        4. If a column is not found in text, omit it or set to null.
-        
-        Input Text:
-        {text}
-        """
-        
-        response = model.generate_content(prompt)
-        cleaned_response = response.text.replace("```json", "").replace("```", "").strip()
-        
-        data = json.loads(cleaned_response)
-        if isinstance(data, dict):
-            data = [data]
-        return data
-        
-    except Exception as e:
-        print(f"Gemini Extraction Error: {e}")
-        return []
 
 # System columns to ignore during validation/display so we don't flag them as missing
 IGNORED_COLUMNS = {
@@ -373,59 +366,16 @@ async def extract(
     # Determine if file is an image or PDF
     is_image = safe_filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.tif', '.webp', '.bmp', '.gif'))
     
-    # 1. Extract
-    if sel_obj.use_ai:
-        # AI Extraction Path
-        if is_image:
-            # Extract text from image using OCR
-            try:
-                image = Image.open(file_path)
-                width, height = image.size
-                x0 = max(0, min(int(sel_obj.x_pct * width), width))
-                y0 = max(0, min(int(sel_obj.y_pct * height), height))
-                x1 = max(x0, min(int((sel_obj.x_pct + sel_obj.w_pct) * width), width))
-                y1 = max(y0, min(int((sel_obj.y_pct + sel_obj.h_pct) * height), height))
-                cropped = image.crop((x0, y0, x1, y1))
-                
-                # Try to extract text with OCR
-                text_content = ""
-                try:
-                    text_content = pytesseract.image_to_string(cropped)
-                except Exception as ocr_err:
-                    print(f"OCR extraction failed: {ocr_err}")
-                    # If OCR fails, return a helpful message
-                    return {"message": "OCR extraction failed. Tesseract may not be installed. Please use standard mode or install Tesseract.", "raw_data": [], "sql_data": [], "schema": []}
-                    
-            except Exception as e:
-                return {"message": f"Failed to process image: {str(e)}", "raw_data": [], "sql_data": [], "schema": []}
-        else:
-            # Extract text from PDF
-            with pdfplumber.open(file_path) as pdf:
-                page = pdf.pages[sel_obj.page_number - 1]
-                width, height = page.width, page.height
-                x0 = max(0, min(sel_obj.x_pct * width, width))
-                top = max(0, min(sel_obj.y_pct * height, height))
-                x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
-                bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
-                
-                cropped = page.crop((x0, top, x1, bottom))
-                text_content = cropped.extract_text()
-        
-        if not text_content or len(text_content.strip()) < 5:
-             return {"message": "Region is empty or unreadable", "raw_data": [], "sql_data": [], "schema": []}
-             
-        raw_data = extract_with_gemini(text_content, table_name)
+    # Extract based on file type
+    if is_image:
+        raw_data = extract_from_image(file_path, sel_obj, use_raw_headers=True)
     else:
-        # Standard Extraction Path
-        if is_image:
-            raw_data = extract_from_image(file_path, sel_obj, use_raw_headers=True)
-        else:
-            raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
+        raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
     
     if not raw_data:
         return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
 
-    # 2. Validate
+    # Validate
     result = validate_data(raw_data, table_name)
     
     if "error" in result:

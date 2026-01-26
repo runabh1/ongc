@@ -21,7 +21,6 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   const [selection, setSelection] = useState<any>(null);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [showLabelSelector, setShowLabelSelector] = useState(false);
-  const [useAi, setUseAi] = useState(false);
   const [pageDimensions, setPageDimensions] = useState<{ width: number; height: number } | null>(null);
   const [isImage, setIsImage] = useState(false);
   
@@ -90,8 +89,7 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
       y_pct: actualY / pageDimensions.height,
       w_pct: actualWidth / pageDimensions.width,
       h_pct: actualHeight / pageDimensions.height,
-      label: label,
-      use_ai: useAi
+      label: label
     };
 
     onExtract(normalized);
@@ -135,13 +133,6 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
             </span>
           )}
         </div>
-        
-        <button
-          onClick={() => setUseAi(!useAi)}
-          className={`px-4 py-2 rounded-lg font-semibold shadow-sm transition-all text-sm flex items-center gap-2 border ${useAi ? 'bg-purple-100 text-purple-700 border-purple-300' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
-        >
-          {useAi ? '✨ AI Mode: ON' : '✨ AI Mode: OFF'}
-        </button>
 
         <button 
           onClick={() => setIsSelecting(!isSelecting)}

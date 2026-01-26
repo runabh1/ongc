@@ -7,8 +7,6 @@ pandas
 pydantic
 psycopg2-binary
 reportlab
-google-generativeai
 gunicorn
 python-dotenv
 Pillow
-pytesseract
