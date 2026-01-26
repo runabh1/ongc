@@ -155,6 +155,9 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
         page = pdf.pages[sel.page_number - 1]
         width, height = page.width, page.height
         
+        print(f"DEBUG: Page dimensions: {width}x{height}")
+        print(f"DEBUG: Selection (normalized): x_pct={sel.x_pct}, y_pct={sel.y_pct}, w_pct={sel.w_pct}, h_pct={sel.h_pct}")
+        
         # Convert normalized percentages to PDF points and clamp to page bounds
         x0 = max(0, min(sel.x_pct * width, width))
         top = max(0, min(sel.y_pct * height, height))
@@ -163,39 +166,32 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
         
         bbox = (x0, top, x1, bottom)
         
+        print(f"DEBUG: Cropped bbox: ({x0}, {top}, {x1}, {bottom})")
+        print(f"DEBUG: Crop dimensions: {x1-x0} x {bottom-top}")
+        
         if x1 - x0 <= 0 or bottom - top <= 0:
             return []
         
+        # Crop the page to ONLY the selected region
         cropped = page.crop(bbox)
         
-        # Extract ALL tables from the page first (to get full context)
-        all_tables = page.extract_tables()
-        
-        # Filter to only tables that overlap significantly with our selected region
-        relevant_tables = []
-        if all_tables:
-            for table in all_tables:
-                if not table or not table[0]:
-                    continue
-                # Get table location (pdfplumber provides table bbox via extract_table with return_settings)
-                # For now, we'll use all tables found in cropped region
-                relevant_tables.append(table)
-        
-        # Get tables from cropped region directly
+        # Get ONLY tables from the cropped region (not from full page)
         cropped_tables = cropped.extract_tables()
+        
+        print(f"DEBUG: Found {len(cropped_tables) if cropped_tables else 0} tables in cropped region")
         
         table_extracted = False
         
-        # Prioritize tables found in cropped region
-        tables_to_process = cropped_tables if cropped_tables else relevant_tables
-        
-        if tables_to_process:
+        if cropped_tables:
             # Process tables - prefer larger tables (more likely to be the main data)
-            tables_to_process.sort(key=lambda t: len(t) * len(t[0]) if t and t[0] else 0, reverse=True)
+            cropped_tables.sort(key=lambda t: len(t) * len(t[0]) if t and t[0] else 0, reverse=True)
             
-            for table in tables_to_process:
+            for table_idx, table in enumerate(cropped_tables):
                 if not table or not table[0]: 
+                    print(f"DEBUG: Skipping table {table_idx} - empty or no header")
                     continue
+                
+                print(f"DEBUG: Processing table {table_idx} with {len(table)} rows and {len(table[0])} cols")
                 
                 # Assume first row is header
                 header_row = table[0]
@@ -210,29 +206,39 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
                             valid_headers[idx] = str(h).strip().lower().replace(" ", "_").replace(".", "")
                         header_count += 1
                 
+                print(f"DEBUG: Table {table_idx} has {header_count} valid headers")
+                
                 # Only process if we have reasonable headers (at least 2)
                 if header_count < 2:
+                    print(f"DEBUG: Skipping table {table_idx} - insufficient headers")
                     continue
                 
                 # Extract data rows
                 rows_extracted = 0
-                for row in table[1:]:
+                for row_idx, row in enumerate(table[1:]):
                     row_data = {}
                     for idx, val in enumerate(row):
                         if idx in valid_headers and val and str(val).strip():
                             row_data[valid_headers[idx]] = str(val).strip()
                     if row_data:
+                        print(f"DEBUG: Extracted row {row_idx}: {row_data}")
                         data.append(row_data)
                         rows_extracted += 1
                         table_extracted = True
                 
+                print(f"DEBUG: Extracted {rows_extracted} rows from table {table_idx}")
+                
                 # If we successfully extracted data, use this table
                 if rows_extracted > 0:
+                    print(f"DEBUG: Using table {table_idx} - breaking out of loop")
                     break
         
         if not table_extracted:
-            # Fallback: Raw text extraction
+            # Fallback: Extract text from cropped region only
             text = cropped.extract_text()
+            
+            print(f"DEBUG: No table found, attempting text extraction")
+            print(f"DEBUG: Extracted text length: {len(text) if text else 0}")
             
             # Attempt simple KV parsing (e.g. "Field: Value")
             kv_data = {}
@@ -248,9 +254,11 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
                             kv_data[k] = v
             
             if kv_data:
+                print(f"DEBUG: Found {len(kv_data)} key-value pairs")
                 data.append(kv_data)
             else:
-                data.append({"raw_text": text if text else "No text found", "_warning": "No table structure detected"})
+                print(f"DEBUG: No key-value pairs found, returning raw text warning")
+                data.append({"raw_text": text if text else "No text found", "_warning": "No table structure detected in selected region"})
             
     return data
 
