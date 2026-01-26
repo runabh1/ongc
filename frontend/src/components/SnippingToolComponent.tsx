@@ -23,8 +23,20 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   const [showLabelSelector, setShowLabelSelector] = useState(false);
   const [useAi, setUseAi] = useState(false);
   const [pageDimensions, setPageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [isImage, setIsImage] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+
+  // Detect if file is image or PDF
+  React.useEffect(() => {
+    const isImageFile = file.type.startsWith('image/');
+    setIsImage(isImageFile);
+    if (isImageFile) {
+      setNumPages(1);
+      setPageNumber(1);
+    }
+  }, [file]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!isSelecting || !containerRef.current) return;
@@ -61,24 +73,23 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
     // Get the actual rendered container dimensions
     const rect = containerRef.current.getBoundingClientRect();
     
-    // Calculate scale factor between rendered page and actual PDF dimensions
-    // containerRef width is the rendered width (800px), pageDimensions.width is actual PDF width
+    // Calculate scale factor between rendered page and actual dimensions
     const scaleX = pageDimensions.width / rect.width;
     const scaleY = pageDimensions.height / rect.height;
     
-    // Convert screen coordinates to actual PDF coordinates
-    const pdfX = selection.x * scaleX;
-    const pdfY = selection.y * scaleY;
-    const pdfWidth = selection.width * scaleX;
-    const pdfHeight = selection.height * scaleY;
+    // Convert screen coordinates to actual coordinates
+    const actualX = selection.x * scaleX;
+    const actualY = selection.y * scaleY;
+    const actualWidth = selection.width * scaleX;
+    const actualHeight = selection.height * scaleY;
     
-    // Normalize to 0.0-1.0 range based on actual PDF dimensions
+    // Normalize to 0.0-1.0 range based on actual dimensions
     const normalized = {
-      page_number: pageNumber,
-      x_pct: pdfX / pageDimensions.width,
-      y_pct: pdfY / pageDimensions.height,
-      w_pct: pdfWidth / pageDimensions.width,
-      h_pct: pdfHeight / pageDimensions.height,
+      page_number: isImage ? 1 : pageNumber,
+      x_pct: actualX / pageDimensions.width,
+      y_pct: actualY / pageDimensions.height,
+      w_pct: actualWidth / pageDimensions.width,
+      h_pct: actualHeight / pageDimensions.height,
       label: label,
       use_ai: useAi
     };
@@ -97,23 +108,32 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
     <div className="flex flex-col h-full bg-gray-100">
       <div className="bg-white border-b border-gray-200 px-4 py-3 flex justify-between items-center shadow-sm z-10">
         <div className="flex items-center space-x-3">
-          <button 
-            disabled={pageNumber <= 1} 
-            onClick={() => setPageNumber(p => p - 1)} 
-            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-colors shadow-sm"
-          >
-            &larr; Previous
-          </button>
-          <span className="text-sm text-gray-600 font-medium min-w-[100px] text-center">
-            Page <span className="text-gray-900 font-bold">{pageNumber}</span> of <span className="text-gray-900 font-bold">{numPages}</span>
-          </span>
-          <button 
-            disabled={pageNumber >= numPages} 
-            onClick={() => setPageNumber(p => p + 1)} 
-            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-colors shadow-sm"
-          >
-            Next &rarr;
-          </button>
+          {!isImage && (
+            <>
+              <button 
+                disabled={pageNumber <= 1} 
+                onClick={() => setPageNumber(p => p - 1)} 
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-colors shadow-sm"
+              >
+                &larr; Previous
+              </button>
+              <span className="text-sm text-gray-600 font-medium min-w-[100px] text-center">
+                Page <span className="text-gray-900 font-bold">{pageNumber}</span> of <span className="text-gray-900 font-bold">{numPages}</span>
+              </span>
+              <button 
+                disabled={pageNumber >= numPages} 
+                onClick={() => setPageNumber(p => p + 1)} 
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-colors shadow-sm"
+              >
+                Next &rarr;
+              </button>
+            </>
+          )}
+          {isImage && (
+            <span className="text-sm text-gray-600 font-medium px-4 py-2 bg-gray-100 rounded-lg">
+              📷 Image Mode
+            </span>
+          )}
         </div>
         
         <button
@@ -144,25 +164,41 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
         >
-          <Document 
-            file={file} 
-            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            onLoadError={(error) => console.error("Error loading PDF:", error)}
-          >
-            <Page 
-              pageNumber={pageNumber} 
-              width={800} 
-              renderTextLayer={false} 
-              renderAnnotationLayer={false}
-              onLoadSuccess={(page: any) => {
-                // Capture actual PDF page dimensions
+          {isImage ? (
+            <img
+              ref={imageRef}
+              src={URL.createObjectURL(file)}
+              alt="Upload preview"
+              style={{ width: '800px', display: 'block' }}
+              onLoad={(e) => {
+                const img = e.currentTarget;
                 setPageDimensions({
-                  width: page.width,
-                  height: page.height
+                  width: img.naturalWidth,
+                  height: img.naturalHeight
                 });
               }}
             />
-          </Document>
+          ) : (
+            <Document 
+              file={file} 
+              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+              onLoadError={(error) => console.error("Error loading PDF:", error)}
+            >
+              <Page 
+                pageNumber={pageNumber} 
+                width={800} 
+                renderTextLayer={false} 
+                renderAnnotationLayer={false}
+                onLoadSuccess={(page: any) => {
+                  // Capture actual PDF page dimensions
+                  setPageDimensions({
+                    width: page.width,
+                    height: page.height
+                  });
+                }}
+              />
+            </Document>
+          )}
           
           {selection && (
             <div style={{

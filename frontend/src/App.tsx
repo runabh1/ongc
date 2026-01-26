@@ -156,7 +156,7 @@ function App() {
               <svg className="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
             </div>
             <h2 className="text-2xl font-bold text-gray-900 mb-3">Upload Completion Report</h2>
-            <p className="text-gray-500 mb-8">Upload a PDF document to start extracting well data using the snipping tool.</p>
+            <p className="text-gray-500 mb-8">Upload a PDF or image to start extracting well data using the snipping tool.</p>
             
             {isUploading ? (
               <div className="flex flex-col items-center justify-center text-blue-600">
@@ -170,7 +170,7 @@ function App() {
               <div className="relative">
                 <input 
                   type="file" 
-                  accept="application/pdf" 
+                  accept="application/pdf, image/png, image/jpeg, image/jpg, image/tiff, image/webp" 
                   onChange={handleFileChange} 
                   className="hidden"
                   id="file-upload"
@@ -179,7 +179,7 @@ function App() {
                   htmlFor="file-upload"
                   className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 cursor-pointer transition-colors shadow-sm w-full sm:w-auto"
                 >
-                  Select PDF File
+                  Select PDF or Image
                 </label>
               </div>
             )}

@@ -14,6 +14,8 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 import google.generativeai as genai
+from PIL import Image
+import pytesseract
 
 from database import init_db, get_table_schema, engine
 from sqlalchemy import inspect
@@ -72,6 +74,57 @@ LABEL_TO_TABLE = {
 }
 
 # --- LOGIC ---
+
+def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: bool = False) -> List[Dict]:
+    """Extract data from an image using OCR or table detection."""
+    data = []
+    try:
+        image = Image.open(image_path)
+        width, height = image.size
+        
+        # Convert normalized percentages to pixel coordinates
+        x0 = max(0, min(int(sel.x_pct * width), width))
+        y0 = max(0, min(int(sel.y_pct * height), height))
+        x1 = max(x0, min(int((sel.x_pct + sel.w_pct) * width), width))
+        y1 = max(y0, min(int((sel.y_pct + sel.h_pct) * height), height))
+        
+        if x1 - x0 <= 0 or y1 - y0 <= 0:
+            return []
+        
+        # Crop the image to the selected region
+        cropped_image = image.crop((x0, y0, x1, y1))
+        
+        # Try OCR to extract text
+        try:
+            text = pytesseract.image_to_string(cropped_image)
+        except:
+            # Fallback if OCR fails
+            text = ""
+        
+        if text and text.strip():
+            # Try to parse as key-value pairs
+            kv_data = {}
+            lines = text.split('\n')
+            for line in lines:
+                if ':' in line:
+                    parts = line.split(':', 1)
+                    k = parts[0].strip()
+                    v = parts[1].strip()
+                    if k and v:
+                        kv_data[k] = v
+            
+            if kv_data:
+                data.append(kv_data)
+            else:
+                data.append({"raw_text": text, "_warning": "No structured data detected"})
+        else:
+            data.append({"raw_text": "No text detected in region", "_warning": "Image may not contain readable text"})
+            
+    except Exception as e:
+        print(f"Image extraction error: {e}")
+        data.append({"_error": str(e)})
+    
+    return data
 
 def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bool = False) -> List[Dict]:
     data = []
@@ -274,28 +327,50 @@ async def extract(
     table_name = LABEL_TO_TABLE.get(sel_obj.label)
     if not table_name:
         raise HTTPException(status_code=400, detail="Label not mapped to SQL table")
-        
+    
+    # Determine if file is an image or PDF
+    is_image = safe_filename.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.tif', '.webp', '.bmp', '.gif'))
+    
     # 1. Extract
     if sel_obj.use_ai:
         # AI Extraction Path
-        with pdfplumber.open(file_path) as pdf:
-            page = pdf.pages[sel_obj.page_number - 1]
-            width, height = page.width, page.height
-            x0 = max(0, min(sel_obj.x_pct * width, width))
-            top = max(0, min(sel_obj.y_pct * height, height))
-            x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
-            bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
-            
-            cropped = page.crop((x0, top, x1, bottom))
-            text_content = cropped.extract_text()
-            
+        if is_image:
+            # Extract text from image using OCR
+            from PIL import Image
+            try:
+                image = Image.open(file_path)
+                width, height = image.size
+                x0 = max(0, min(int(sel_obj.x_pct * width), width))
+                y0 = max(0, min(int(sel_obj.y_pct * height), height))
+                x1 = max(x0, min(int((sel_obj.x_pct + sel_obj.w_pct) * width), width))
+                y1 = max(y0, min(int((sel_obj.y_pct + sel_obj.h_pct) * height), height))
+                cropped = image.crop((x0, y0, x1, y1))
+                text_content = pytesseract.image_to_string(cropped)
+            except Exception as e:
+                return {"message": f"Failed to extract text from image: {str(e)}", "raw_data": [], "sql_data": [], "schema": []}
+        else:
+            # Extract text from PDF
+            with pdfplumber.open(file_path) as pdf:
+                page = pdf.pages[sel_obj.page_number - 1]
+                width, height = page.width, page.height
+                x0 = max(0, min(sel_obj.x_pct * width, width))
+                top = max(0, min(sel_obj.y_pct * height, height))
+                x1 = max(x0, min((sel_obj.x_pct + sel_obj.w_pct) * width, width))
+                bottom = max(top, min((sel_obj.y_pct + sel_obj.h_pct) * height, height))
+                
+                cropped = page.crop((x0, top, x1, bottom))
+                text_content = cropped.extract_text()
+        
         if not text_content or len(text_content.strip()) < 5:
              return {"message": "Region is empty or unreadable", "raw_data": [], "sql_data": [], "schema": []}
              
         raw_data = extract_with_gemini(text_content, table_name)
     else:
         # Standard Extraction Path
-        raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
+        if is_image:
+            raw_data = extract_from_image(file_path, sel_obj, use_raw_headers=True)
+        else:
+            raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
     
     if not raw_data:
         return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}

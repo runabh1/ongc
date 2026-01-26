@@ -10,3 +10,5 @@ reportlab
 google-generativeai
 gunicorn
 python-dotenv
+Pillow
+pytesseract
