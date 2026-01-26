@@ -16,6 +16,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 import google.generativeai as genai
 from PIL import Image
 import pytesseract
+import io
+import base64
 
 from database import init_db, get_table_schema, engine
 from sqlalchemy import inspect
@@ -76,7 +78,7 @@ LABEL_TO_TABLE = {
 # --- LOGIC ---
 
 def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: bool = False) -> List[Dict]:
-    """Extract data from an image using OCR or table detection."""
+    """Extract data from an image. Uses OCR if available, otherwise returns region info."""
     data = []
     try:
         image = Image.open(image_path)
@@ -95,34 +97,60 @@ def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: b
         cropped_image = image.crop((x0, y0, x1, y1))
         
         # Try OCR to extract text
+        text = ""
         try:
             text = pytesseract.image_to_string(cropped_image)
-        except:
-            # Fallback if OCR fails
+        except Exception as ocr_error:
+            # OCR failed - this is common if Tesseract is not installed
+            print(f"OCR failed (Tesseract may not be installed): {ocr_error}")
+            # Try to get text from image metadata or return a placeholder
             text = ""
         
+        # If we got text from OCR, parse it
         if text and text.strip():
-            # Try to parse as key-value pairs
+            # Try to parse as key-value pairs or tabular data
             kv_data = {}
             lines = text.split('\n')
+            
+            # First try to identify if it's a table (lines with multiple fields)
+            is_table = False
             for line in lines:
-                if ':' in line:
-                    parts = line.split(':', 1)
-                    k = parts[0].strip()
-                    v = parts[1].strip()
-                    if k and v:
-                        kv_data[k] = v
+                # Count separators that might indicate tabular data
+                if '\t' in line or '  ' in line:
+                    is_table = True
+                    break
+            
+            if is_table:
+                # Try to parse as table
+                for line in lines:
+                    if line.strip():
+                        # Split by tabs or multiple spaces
+                        parts = line.split('\t') if '\t' in line else line.split()
+                        for i, part in enumerate(parts):
+                            if part.strip():
+                                kv_data[f"field_{i}"] = part.strip()
+            else:
+                # Parse as key-value pairs
+                for line in lines:
+                    if ':' in line:
+                        parts = line.split(':', 1)
+                        k = parts[0].strip()
+                        v = parts[1].strip()
+                        if k and v:
+                            kv_data[k] = v
             
             if kv_data:
                 data.append(kv_data)
             else:
-                data.append({"raw_text": text, "_warning": "No structured data detected"})
+                # No structured data found, return raw text
+                data.append({"extracted_text": text})
         else:
-            data.append({"raw_text": "No text detected in region", "_warning": "Image may not contain readable text"})
+            # No text extracted - return placeholder indicating region was empty
+            data.append({"_warning": "No readable text found in selected region. Ensure the region contains visible text or use AI mode for better results."})
             
     except Exception as e:
         print(f"Image extraction error: {e}")
-        data.append({"_error": str(e)})
+        data.append({"_error": f"Failed to process image: {str(e)}"})
     
     return data
 
@@ -265,6 +293,14 @@ def validate_data(data: List[Dict], table_name: str):
         errors = []
         clean_row = {}
         
+        # Skip rows with only warnings or errors
+        if "_warning" in row or "_error" in row:
+            # Keep these special rows as-is
+            clean_row = row.copy()
+            clean_row["_status"] = "WARNING" if "_warning" in row else "ERROR"
+            validated_rows.append(clean_row)
+            continue
+        
         # 1. Map extracted data to SQL columns and check for unknown columns
         for key, val in row.items():
             if key.startswith("_"): continue # Skip internal flags
@@ -290,15 +326,21 @@ def validate_data(data: List[Dict], table_name: str):
                 errors.append(f"Unknown column: {key}")
                 row_status = "INVALID"
         
-        # 2. Check for Missing Columns (Compare against SQL Schema)
+        # 2. Only mark as INVALID if we found actual data but have unknown columns
+        # If we have data that maps to known columns, keep it as VALID
+        # Missing columns should just be null
+        if not clean_row and not errors:
+            # Empty row
+            row_status = "WARNING"
+            errors.append("No data extracted")
+        
+        # Fill in missing columns with None
         for col in display_columns:
-            if col not in clean_row or clean_row[col] is None or clean_row[col] == "":
+            if col not in clean_row:
                 clean_row[col] = None
-                errors.append(f"Missing: {col}")
-                row_status = "INVALID"
         
         clean_row["_status"] = row_status
-        clean_row["_errors"] = "; ".join(errors)
+        clean_row["_errors"] = "; ".join(errors) if errors else ""
         validated_rows.append(clean_row)
         
     return {"schema": display_columns, "data": validated_rows}
@@ -336,7 +378,6 @@ async def extract(
         # AI Extraction Path
         if is_image:
             # Extract text from image using OCR
-            from PIL import Image
             try:
                 image = Image.open(file_path)
                 width, height = image.size
@@ -345,9 +386,18 @@ async def extract(
                 x1 = max(x0, min(int((sel_obj.x_pct + sel_obj.w_pct) * width), width))
                 y1 = max(y0, min(int((sel_obj.y_pct + sel_obj.h_pct) * height), height))
                 cropped = image.crop((x0, y0, x1, y1))
-                text_content = pytesseract.image_to_string(cropped)
+                
+                # Try to extract text with OCR
+                text_content = ""
+                try:
+                    text_content = pytesseract.image_to_string(cropped)
+                except Exception as ocr_err:
+                    print(f"OCR extraction failed: {ocr_err}")
+                    # If OCR fails, return a helpful message
+                    return {"message": "OCR extraction failed. Tesseract may not be installed. Please use standard mode or install Tesseract.", "raw_data": [], "sql_data": [], "schema": []}
+                    
             except Exception as e:
-                return {"message": f"Failed to extract text from image: {str(e)}", "raw_data": [], "sql_data": [], "schema": []}
+                return {"message": f"Failed to process image: {str(e)}", "raw_data": [], "sql_data": [], "schema": []}
         else:
             # Extract text from PDF
             with pdfplumber.open(file_path) as pdf:

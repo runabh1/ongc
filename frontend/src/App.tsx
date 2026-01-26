@@ -69,6 +69,11 @@ function App() {
       const res = await extractData(uploadedName, selection);
       if (res.error) {
         alert(res.error);
+      } else if (res.message) {
+        // Handle cases where extraction had a message (empty region, etc)
+        alert(res.message);
+      } else if (!res.sql_data || res.sql_data.length === 0) {
+        alert("No data could be extracted from the selected region. Please ensure:\n1. The region contains readable text or data\n2. For images, ensure text is clear and visible\n3. Try using AI Mode for better results with unclear text");
       } else {
         // Append new extraction to the list instead of overwriting
         setExtractions(prev => [
@@ -84,7 +89,7 @@ function App() {
       }
     } catch (err) {
       console.error(err);
-      alert("Extraction failed");
+      alert("Extraction failed. Please check the browser console for details.");
     }
   };
 
