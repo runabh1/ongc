@@ -22,6 +22,7 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [showLabelSelector, setShowLabelSelector] = useState(false);
   const [useAi, setUseAi] = useState(false);
+  const [pageDimensions, setPageDimensions] = useState<{ width: number; height: number } | null>(null);
   
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -55,17 +56,29 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   };
 
   const handleLabelSelect = (label: string) => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !pageDimensions) return;
     
-    // Normalize coordinates (0.0 to 1.0)
+    // Get the actual rendered container dimensions
     const rect = containerRef.current.getBoundingClientRect();
-    // Note: We use the container dimensions because the Page scales to fit
+    
+    // Calculate scale factor between rendered page and actual PDF dimensions
+    // containerRef width is the rendered width (800px), pageDimensions.width is actual PDF width
+    const scaleX = pageDimensions.width / rect.width;
+    const scaleY = pageDimensions.height / rect.height;
+    
+    // Convert screen coordinates to actual PDF coordinates
+    const pdfX = selection.x * scaleX;
+    const pdfY = selection.y * scaleY;
+    const pdfWidth = selection.width * scaleX;
+    const pdfHeight = selection.height * scaleY;
+    
+    // Normalize to 0.0-1.0 range based on actual PDF dimensions
     const normalized = {
       page_number: pageNumber,
-      x_pct: selection.x / rect.width,
-      y_pct: selection.y / rect.height,
-      w_pct: selection.width / rect.width,
-      h_pct: selection.height / rect.height,
+      x_pct: pdfX / pageDimensions.width,
+      y_pct: pdfY / pageDimensions.height,
+      w_pct: pdfWidth / pageDimensions.width,
+      h_pct: pdfHeight / pageDimensions.height,
       label: label,
       use_ai: useAi
     };
@@ -136,7 +149,19 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
             onLoadSuccess={({ numPages }) => setNumPages(numPages)}
             onLoadError={(error) => console.error("Error loading PDF:", error)}
           >
-            <Page pageNumber={pageNumber} width={800} renderTextLayer={false} renderAnnotationLayer={false} />
+            <Page 
+              pageNumber={pageNumber} 
+              width={800} 
+              renderTextLayer={false} 
+              renderAnnotationLayer={false}
+              onLoadSuccess={(page: any) => {
+                // Capture actual PDF page dimensions
+                setPageDimensions({
+                  width: page.width,
+                  height: page.height
+                });
+              }}
+            />
           </Document>
           
           {selection && (
