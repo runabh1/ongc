@@ -197,20 +197,38 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
                 header_row = table[0]
                 valid_headers = {} # index -> cleaned_name
                 header_count = 0
+                header_texts = []
                 
                 for idx, h in enumerate(header_row):
                     if h and str(h).strip():
+                        header_text = str(h).strip()
+                        header_texts.append(header_text)
                         if use_raw_headers:
-                            valid_headers[idx] = str(h).strip()
+                            valid_headers[idx] = header_text
                         else:
-                            valid_headers[idx] = str(h).strip().lower().replace(" ", "_").replace(".", "")
+                            valid_headers[idx] = header_text.lower().replace(" ", "_").replace(".", "")
                         header_count += 1
                 
+                print(f"DEBUG: Table {table_idx} headers: {header_texts}")
                 print(f"DEBUG: Table {table_idx} has {header_count} valid headers")
                 
                 # Only process if we have reasonable headers (at least 2)
                 if header_count < 2:
                     print(f"DEBUG: Skipping table {table_idx} - insufficient headers")
+                    continue
+                
+                # Check if this table has enough data rows (at least 1 complete row)
+                valid_data_rows = 0
+                for row in table[1:]:
+                    # Count how many cells in this row have content
+                    filled_cells = sum(1 for cell in row if cell and str(cell).strip())
+                    if filled_cells >= header_count * 0.5:  # At least 50% of headers
+                        valid_data_rows += 1
+                
+                print(f"DEBUG: Table {table_idx} has {valid_data_rows} valid data rows")
+                
+                if valid_data_rows == 0:
+                    print(f"DEBUG: Skipping table {table_idx} - no valid data rows")
                     continue
                 
                 # Extract data rows
@@ -221,7 +239,7 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
                         if idx in valid_headers and val and str(val).strip():
                             row_data[valid_headers[idx]] = str(val).strip()
                     if row_data:
-                        print(f"DEBUG: Extracted row {row_idx}: {row_data}")
+                        print(f"DEBUG: Extracted row {row_idx}: {list(row_data.keys())}")
                         data.append(row_data)
                         rows_extracted += 1
                         table_extracted = True
