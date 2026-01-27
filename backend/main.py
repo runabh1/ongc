@@ -147,7 +147,7 @@ def parse_with_gemini(text: str, label: str) -> List[Dict]:
         except Exception:
             columns = "Infer columns from text"
 
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
         
         prompt = f"""
         You are a data extraction assistant. Extract structured data from the following text.
