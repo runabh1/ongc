@@ -656,6 +656,42 @@ IGNORED_COLUMNS = {
     "VECTOR_IDS", "PAGE_NUMBERS", "MATCH_ID"
 }
 
+def map_columns_with_gemini(unmapped_keys: List[str], schema_columns: List[str], table_name: str) -> Dict[str, str]:
+    """
+    Uses Gemini to map extracted headers to SQL columns when heuristics fail.
+    """
+    if not unmapped_keys or not schema_columns:
+        return {}
+    
+    print(f"DEBUG: Asking Gemini to map columns for {table_name}: {unmapped_keys}")
+    
+    try:
+        model = genai.GenerativeModel('gemini-3-flash-preview')
+        
+        prompt = f"""
+        You are a database schema mapper. Map the extracted column headers to the correct SQL table columns.
+        
+        Target Table: {table_name}
+        Available SQL Columns: {", ".join(schema_columns)}
+        
+        Extracted Headers to Map: {", ".join(unmapped_keys)}
+        
+        Instructions:
+        1. For each extracted header, find the semantically best matching SQL column.
+        2. Ignore case differences (e.g. "well" matches "WELL_NAME").
+        3. Return a JSON object where keys are the extracted headers and values are the SQL columns.
+        4. If no good match exists for a header, do not include it in the JSON.
+        5. Output ONLY valid JSON.
+        """
+        
+        response = model.generate_content(prompt)
+        cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
+        mapping = json.loads(cleaned_text)
+        return mapping if isinstance(mapping, dict) else {}
+    except Exception as e:
+        print(f"ERROR: Gemini column mapping failed: {e}")
+        return {}
+
 def validate_data(data: List[Dict], table_name: str):
     try:
         schema = get_table_schema(table_name)
@@ -677,6 +713,62 @@ def validate_data(data: List[Dict], table_name: str):
     # Filter schema for display/validation (exclude system columns)
     display_columns = [k for k in schema.keys() if k.upper() not in IGNORED_COLUMNS]
     
+    # --- PHASE 1: Identify all unique keys in the data ---
+    all_keys = set()
+    for row in data:
+        for k in row.keys():
+            if not k.startswith("_"):
+                all_keys.add(k)
+    
+    # --- PHASE 2: Build Column Mapping (Heuristic + LLM) ---
+    key_mapping = {}
+    unmapped_keys = []
+    
+    for key in all_keys:
+        norm_key = normalize_key(key)
+        real_col_name = None
+        
+        # 1. Exact Normalized Match
+        if norm_key in schema_map:
+            real_col_name = schema_map[norm_key]
+        
+        # 2. Fuzzy Match (Substring)
+        if not real_col_name:
+            for sql_norm, sql_orig in sql_cols_normalized:
+                if sql_norm in norm_key and len(sql_norm) > 2: 
+                    real_col_name = sql_orig
+                    break
+        
+        # 3. Smart semantic matching (Hardcoded patterns)
+        if not real_col_name:
+            key_lower = key.lower()
+            if "type" in key_lower and ("casing" in schema.keys() or any("CASING_TYPE" in c for c in schema.keys())):
+                real_col_name = "CASING_TYPE"
+            elif ("depth" in key_lower or "bottom" in key_lower) and "CASING_BOTTOM" in schema.keys():
+                real_col_name = "CASING_BOTTOM"
+            elif ("top" in key_lower) and "CASING_TOP" in schema.keys():
+                real_col_name = "CASING_TOP"
+            elif ("diameter" in key_lower or "od" in key_lower) and "OUTER_DIAMETER" in schema.keys():
+                real_col_name = "OUTER_DIAMETER"
+            elif ("length" in key_lower or "grade" in key_lower) and "STEEL_GRADE" in schema.keys():
+                real_col_name = "STEEL_GRADE"
+            elif ("material" in key_lower or "grade" in key_lower) and "MATERIAL_TYPE" in schema.keys():
+                real_col_name = "MATERIAL_TYPE"
+        
+        if real_col_name:
+            key_mapping[key] = real_col_name
+        else:
+            unmapped_keys.append(key)
+            
+    # --- PHASE 3: LLM Fallback for Unmapped Keys ---
+    if unmapped_keys:
+        llm_mapping = map_columns_with_gemini(unmapped_keys, list(schema.keys()), table_name)
+        for k, v in llm_mapping.items():
+            if v in schema:
+                key_mapping[k] = v
+                print(f"DEBUG: LLM mapped '{k}' -> '{v}'")
+
+    # --- PHASE 4: Apply Mapping to Rows ---
     for row in data:
         row_status = "VALID"
         errors = []
@@ -690,41 +782,10 @@ def validate_data(data: List[Dict], table_name: str):
             validated_rows.append(clean_row)
             continue
         
-        # 1. Map extracted data to SQL columns and check for unknown columns
         for key, val in row.items():
             if key.startswith("_"): continue # Skip internal flags
-            norm_key = normalize_key(key)
             
-            real_col_name = None
-            
-            # 1. Exact Normalized Match
-            if norm_key in schema_map:
-                real_col_name = schema_map[norm_key]
-            
-            # 2. Fuzzy Match (Substring) - check if key contains SQL column name
-            if not real_col_name:
-                for sql_norm, sql_orig in sql_cols_normalized:
-                    # Check if SQL column is inside Extracted Header (e.g. "FIELD" in "FIELDNAME")
-                    if sql_norm in norm_key and len(sql_norm) > 2: 
-                        real_col_name = sql_orig
-                        break
-            
-            # 3. Smart semantic matching for common patterns
-            if not real_col_name:
-                key_lower = key.lower()
-                # Pattern-based matching for common renamings
-                if "type" in key_lower and ("casing" in schema.keys() or any("CASING_TYPE" in c for c in schema.keys())):
-                    real_col_name = "CASING_TYPE"
-                elif ("depth" in key_lower or "bottom" in key_lower) and "CASING_BOTTOM" in schema.keys():
-                    real_col_name = "CASING_BOTTOM"
-                elif ("top" in key_lower) and "CASING_TOP" in schema.keys():
-                    real_col_name = "CASING_TOP"
-                elif ("diameter" in key_lower or "od" in key_lower) and "OUTER_DIAMETER" in schema.keys():
-                    real_col_name = "OUTER_DIAMETER"
-                elif ("length" in key_lower or "grade" in key_lower) and "STEEL_GRADE" in schema.keys():
-                    real_col_name = "STEEL_GRADE"
-                elif ("material" in key_lower or "grade" in key_lower) and "MATERIAL_TYPE" in schema.keys():
-                    real_col_name = "MATERIAL_TYPE"
+            real_col_name = key_mapping.get(key)
             
             if real_col_name:
                 clean_row[real_col_name] = val
@@ -874,7 +935,20 @@ async def check_existence(
         # Identify common columns for comparison
         common_cols = list(set(existing_df.columns) & set(input_df.columns))
         if not common_cols:
-             return {"exists": [], "new": rows}
+            # Try to map columns using validate_data (which now uses LLM)
+            print("DEBUG: No common columns found. Attempting to map columns with LLM...")
+            validation_result = validate_data(rows, table_name)
+            
+            if "error" not in validation_result and "data" in validation_result:
+                mapped_rows = validation_result["data"]
+                # Re-create DataFrame with mapped data
+                input_df = pd.DataFrame(mapped_rows)
+                input_df = input_df.drop(columns=[c for c in input_df.columns if c.startswith("_")], errors='ignore')
+                # Re-check common columns
+                common_cols = list(set(existing_df.columns) & set(input_df.columns))
+        
+        if not common_cols:
+            return {"exists": [], "new": rows}
 
         # Create signatures for comparison (concat all common values)
         existing_sigs = existing_df[common_cols].astype(str).agg('-'.join, axis=1)
