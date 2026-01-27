@@ -150,19 +150,22 @@ def parse_with_gemini(text: str, label: str) -> List[Dict]:
         model = genai.GenerativeModel('gemini-3-flash-preview')
         
         prompt = f"""
-        You are a data extraction assistant. Extract structured data from the following text.
-        Target Table: {table_name}
-        Expected Columns: {columns}
+        You are a data extraction assistant. Your task is to extract the data exactly as it appears in the provided text, preserving the table structure.
+        
+        Context:
+        - Target Table: {table_name}
+        - Potential Column Names (for reference): {columns}
         
         Text Content:
         {text}
         
         Instructions:
-        1. Return a JSON array of objects.
-        2. Map extracted values to the expected columns where possible.
-        3. If the text represents a table, extract all rows.
-        4. If the text is key-value pairs, extract as a single object in the array.
-        5. Return ONLY the JSON array. No markdown formatting.
+        1. Analyze the text to identify if it contains a table or key-value pairs.
+        2. If it is a table, extract every row and column exactly as they appear.
+        3. Use the headers found in the text as JSON keys. If headers are missing or unclear, use the 'Potential Column Names' to infer the best matching key.
+        4. Do not skip any rows.
+        5. Return the result as a JSON array of objects.
+        6. Output ONLY valid JSON. Do not include markdown formatting (like ```json).
         """
         
         response = model.generate_content(prompt)
