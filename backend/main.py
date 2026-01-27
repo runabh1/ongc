@@ -17,6 +17,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from PIL import Image
 import pytesseract
 import re
+import google.generativeai as genai
 
 from database import init_db, get_table_schema, engine
 from sqlalchemy import inspect
@@ -122,6 +123,55 @@ def setup_pytesseract():
             print("[WARNING] Tesseract not found in PATH")
 
 setup_pytesseract()
+
+# --- GEMINI LLM CONFIGURATION ---
+GEMINI_API_KEY = "AIzaSyCQkOOEJRBnZIvh1YdEC8bedRFLxJ4f0NE"
+genai.configure(api_key=GEMINI_API_KEY)
+
+def parse_with_gemini(text: str, label: str) -> List[Dict]:
+    """
+    Uses Gemini LLM to parse unstructured text into structured JSON 
+    matching the target table schema.
+    """
+    print(f"DEBUG: Parsing text with Gemini for label: {label}")
+    table_name = LABEL_TO_TABLE.get(label)
+    if not table_name:
+        return []
+        
+    try:
+        # Get schema to guide the LLM
+        try:
+            schema = get_table_schema(table_name)
+            columns = ", ".join(schema.keys())
+        except Exception:
+            columns = "Infer columns from text"
+
+        model = genai.GenerativeModel('gemini-pro')
+        
+        prompt = f"""
+        You are a data extraction assistant. Extract structured data from the following text.
+        Target Table: {table_name}
+        Expected Columns: {columns}
+        
+        Text Content:
+        {text}
+        
+        Instructions:
+        1. Return a JSON array of objects.
+        2. Map extracted values to the expected columns where possible.
+        3. If the text represents a table, extract all rows.
+        4. If the text is key-value pairs, extract as a single object in the array.
+        5. Return ONLY the JSON array. No markdown formatting.
+        """
+        
+        response = model.generate_content(prompt)
+        cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
+        data = json.loads(cleaned_text)
+        return data if isinstance(data, list) else [data]
+        
+    except Exception as e:
+        print(f"ERROR: Gemini parsing failed: {e}")
+        return []
 
 def get_canonical_bbox(
     page_w: float, page_h: float,
@@ -243,27 +293,11 @@ def extract_with_ocr(pdf_path: str, sel: RegionSelection) -> List[Dict]:
             
             print(f"DEBUG: OCR extracted text ({len(extracted_text)} chars)")
             
-            # Parse extracted text into structured data
-            kv_data = {}
-            lines = extracted_text.split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Try to parse as key-value pair
-                if ':' in line and len(line) < 100:
-                    parts = line.split(':', 1)
-                    k = parts[0].strip()
-                    v = parts[1].strip()
-                    if k and v and len(k) < 50:
-                        kv_data[k.lower().replace(" ", "_")] = v
-            
-            # Return parsed data
-            if kv_data:
-                print(f"DEBUG: Found {len(kv_data)} key-value pairs from OCR")
-                data.append(kv_data)
+            # Use Gemini for intelligent parsing
+            gemini_data = parse_with_gemini(extracted_text, sel.label)
+            if gemini_data:
+                print(f"DEBUG: Gemini extracted {len(gemini_data)} records from OCR text")
+                data.extend(gemini_data)
             
             if not data:
                 # Return empty so we can fallback to pdfplumber (which is better at tables)
@@ -333,48 +367,14 @@ def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: b
         
         print(f"DEBUG: OCR extracted text ({len(extracted_text)} chars)")
         
-        # Parse extracted text into structured data
-        kv_data = {}
-        table_rows = []
-        
-        lines = extracted_text.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Try to parse as key-value pair
-            if ':' in line and len(line) < 100:
-                parts = line.split(':', 1)
-                k = parts[0].strip()
-                v = parts[1].strip()
-                if k and v and len(k) < 50:
-                    if use_raw_headers:
-                        kv_data[k] = v
-                    else:
-                        kv_data[k.lower().replace(" ", "_")] = v
-            else:
-                # Collect lines that might be table rows
-                if len(line) > 10:
-                    table_rows.append(line)
-        
-        # Return parsed data
-        if kv_data:
-            print(f"DEBUG: Found {len(kv_data)} key-value pairs from OCR")
-            data.append(kv_data)
-        
-        if table_rows:
-            print(f"DEBUG: Found {len(table_rows)} potential table rows")
-            for row_text in table_rows:
-                # Split by multiple spaces to separate columns
-                cells = [cell.strip() for cell in re.split(r'\s{2,}|\t', row_text) if cell.strip()]
-                if len(cells) >= 2:
-                    row_dict = {f"col_{i}": cell for i, cell in enumerate(cells)}
-                    data.append(row_dict)
-        
-        if not data:
-            # Return raw extracted text if no structured data found
-            data.append({"extracted_text": extracted_text[:1000], "_source": "ocr"})
+        # Use Gemini for intelligent parsing
+        gemini_data = parse_with_gemini(extracted_text, sel.label)
+        if gemini_data:
+            print(f"DEBUG: Gemini extracted {len(gemini_data)} records from Image")
+            data.extend(gemini_data)
+        else:
+            # Fallback if Gemini fails
+            data.append({"extracted_text": extracted_text[:1000], "_source": "ocr_raw"})
             
     except Exception as e:
         print(f"Image extraction error: {e}")
@@ -555,35 +555,12 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
         text = cropped.extract_text(layout=True)
         
         if text and text.strip():
-            # Try to parse text as table manually (looking for whitespace gaps)
-            lines = [line.strip() for line in text.split('\n') if line.strip()]
-            
-            # Heuristic: If multiple lines have gaps of 2+ spaces, it's likely a table
-            parsed_rows = []
-            for line in lines:
-                # Split by 2 or more spaces
-                parts = [p.strip() for p in re.split(r'\s{2,}|\t', line) if p.strip()]
-                if len(parts) >= 2:
-                    parsed_rows.append(parts)
-            
-            if len(parsed_rows) >= 2:
-                print(f"DEBUG: Manually parsed {len(parsed_rows)} rows from text")
-                # Assume first row is header
-                headers = parsed_rows[0]
-                
-                # Create dicts for remaining rows
-                for row_parts in parsed_rows[1:]:
-                    row_dict = {}
-                    for i, val in enumerate(row_parts):
-                        # Map value to header if possible, else use col_index
-                        if i < len(headers):
-                            header_name = headers[i] if use_raw_headers else headers[i].lower().replace(" ", "_").replace(".", "")
-                            row_dict[header_name] = val
-                        else:
-                            row_dict[f"col_{i}"] = val
-                    data.append(row_dict)
+            # Use Gemini for intelligent parsing of the text region
+            gemini_data = parse_with_gemini(text, sel.label)
+            if gemini_data:
+                print(f"DEBUG: Gemini extracted {len(gemini_data)} records from PDF text")
+                data.extend(gemini_data)
             else:
-                # Truly unstructured text
                 data.append({"raw_text": text[:2000], "_warning": "No table found - extracted text"})
     
     return data
