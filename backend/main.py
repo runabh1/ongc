@@ -74,6 +74,7 @@ class RegionSelection(BaseModel):
     view_width: Optional[float] = 0.0
     view_height: Optional[float] = 0.0
     label: str    # e.g., "CASING"
+    use_ai: bool = False
 
 # --- CONFIGURATION ---
 LABEL_TO_TABLE = {
@@ -172,6 +173,45 @@ def parse_with_gemini(text: str, label: str) -> List[Dict]:
     except Exception as e:
         print(f"ERROR: Gemini parsing failed: {e}")
         return []
+
+def parse_text_manually(text: str) -> List[Dict]:
+    """
+    Manually parse text into key-value pairs or table rows based on spacing.
+    Used when AI extraction is disabled.
+    """
+    data = []
+    lines = text.split('\n')
+    kv_data = {}
+    table_rows = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+        
+        # Try to parse as key-value pair
+        if ':' in line and len(line) < 100:
+            parts = line.split(':', 1)
+            k = parts[0].strip()
+            v = parts[1].strip()
+            if k and v and len(k) < 50:
+                kv_data[k.lower().replace(" ", "_")] = v
+        else:
+            # Collect lines that might be table rows
+            if len(line) > 5:
+                table_rows.append(line)
+    
+    if kv_data:
+        data.append(kv_data)
+    
+    if table_rows:
+        for row_text in table_rows:
+            # Split by multiple spaces to separate columns
+            cells = [cell.strip() for cell in re.split(r'\s{2,}|\t', row_text) if cell.strip()]
+            if len(cells) >= 2:
+                row_dict = {f"col_{i}": cell for i, cell in enumerate(cells)}
+                data.append(row_dict)
+                
+    return data
 
 def get_canonical_bbox(
     page_w: float, page_h: float,
@@ -293,12 +333,18 @@ def extract_with_ocr(pdf_path: str, sel: RegionSelection) -> List[Dict]:
             
             print(f"DEBUG: OCR extracted text ({len(extracted_text)} chars)")
             
-            # Use Gemini for intelligent parsing
-            gemini_data = parse_with_gemini(extracted_text, sel.label)
-            if gemini_data:
-                print(f"DEBUG: Gemini extracted {len(gemini_data)} records from OCR text")
-                data.extend(gemini_data)
-            
+            if sel.use_ai:
+                # Use Gemini for intelligent parsing
+                gemini_data = parse_with_gemini(extracted_text, sel.label)
+                if gemini_data:
+                    print(f"DEBUG: Gemini extracted {len(gemini_data)} records from OCR text")
+                    data.extend(gemini_data)
+            else:
+                # Use Manual parsing
+                manual_data = parse_text_manually(extracted_text)
+                if manual_data:
+                    data.extend(manual_data)
+
             if not data:
                 # Return empty so we can fallback to pdfplumber (which is better at tables)
                 pass
@@ -367,14 +413,19 @@ def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: b
         
         print(f"DEBUG: OCR extracted text ({len(extracted_text)} chars)")
         
-        # Use Gemini for intelligent parsing
-        gemini_data = parse_with_gemini(extracted_text, sel.label)
-        if gemini_data:
-            print(f"DEBUG: Gemini extracted {len(gemini_data)} records from Image")
-            data.extend(gemini_data)
+        if sel.use_ai:
+            # Use Gemini for intelligent parsing
+            gemini_data = parse_with_gemini(extracted_text, sel.label)
+            if gemini_data:
+                print(f"DEBUG: Gemini extracted {len(gemini_data)} records from Image")
+                data.extend(gemini_data)
         else:
-            # Fallback if Gemini fails
-            data.append({"extracted_text": extracted_text[:1000], "_source": "ocr_raw"})
+            # Use Manual parsing
+            manual_data = parse_text_manually(extracted_text)
+            if manual_data:
+                data.extend(manual_data)
+            else:
+                data.append({"extracted_text": extracted_text[:1000], "_source": "ocr_raw"})
             
     except Exception as e:
         print(f"Image extraction error: {e}")
@@ -555,13 +606,19 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
         text = cropped.extract_text(layout=True)
         
         if text and text.strip():
-            # Use Gemini for intelligent parsing of the text region
-            gemini_data = parse_with_gemini(text, sel.label)
-            if gemini_data:
-                print(f"DEBUG: Gemini extracted {len(gemini_data)} records from PDF text")
-                data.extend(gemini_data)
+            if sel.use_ai:
+                # Use Gemini for intelligent parsing of the text region
+                gemini_data = parse_with_gemini(text, sel.label)
+                if gemini_data:
+                    print(f"DEBUG: Gemini extracted {len(gemini_data)} records from PDF text")
+                    data.extend(gemini_data)
             else:
-                data.append({"raw_text": text[:2000], "_warning": "No table found - extracted text"})
+                # Use Manual parsing
+                manual_data = parse_text_manually(text)
+                if manual_data:
+                    data.extend(manual_data)
+                else:
+                    data.append({"raw_text": text[:2000], "_warning": "No table found - extracted text"})
     
     return data
 

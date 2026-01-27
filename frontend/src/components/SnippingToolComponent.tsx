@@ -23,6 +23,7 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   const [showLabelSelector, setShowLabelSelector] = useState(false);
   const [isImage, setIsImage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [useAi, setUseAi] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -87,7 +88,8 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
       y_pct: 0,
       w_pct: 0,
       h_pct: 0,
-      label: label
+      label: label,
+      use_ai: useAi
     };
 
     onExtract(payload);
@@ -202,6 +204,25 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
             <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
               <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full">
                 <h3 className="text-lg font-bold mb-4 text-gray-800">Select Data Type</h3>
+                
+                {/* Extraction Mode Toggle */}
+                <div className="flex justify-center mb-6">
+                  <div className="flex items-center bg-gray-100 p-1 rounded-lg border border-gray-200">
+                    <button
+                      onClick={() => setUseAi(false)}
+                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all ${!useAi ? 'bg-white text-blue-600 shadow-sm border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      Manual Extraction
+                    </button>
+                    <button
+                      onClick={() => setUseAi(true)}
+                      className={`px-4 py-1.5 rounded-md text-sm font-semibold transition-all ${useAi ? 'bg-white text-purple-600 shadow-sm border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      AI Extraction
+                    </button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   {TABLE_OPTIONS.map(opt => (
                     <button 
