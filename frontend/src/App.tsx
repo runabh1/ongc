@@ -73,9 +73,10 @@ function App() {
         // Handle cases where extraction had a message (empty region, etc)
         alert(res.message);
       } else if (!res.sql_data || res.sql_data.length === 0) {
-        alert("No data could be extracted from the selected region. Please ensure:\n1. The region contains readable text or data\n2. For images, ensure text is clear and visible\n3. Try using AI Mode for better results with unclear text");
+        // Only show error if truly no data was extracted
+        alert("No data could be extracted from the selected region. Please ensure:\n1. The region contains readable text or data\n2. For images, ensure text is clear and visible\n3. Try selecting a different region");
       } else {
-        // Append new extraction to the list instead of overwriting
+        // Append new extraction to the list - even if data is INVALID, show it so user can review/map columns
         setExtractions(prev => [
           ...prev,
           {
@@ -87,9 +88,20 @@ function App() {
           }
         ]);
       }
-    } catch (err) {
-      console.error(err);
-      alert("Extraction failed. Please check the browser console for details.");
+    } catch (err: any) {
+      console.error("Extraction error:", err);
+      // Show more detailed error info
+      let errorMsg = "Extraction failed. ";
+      if (err.response?.status === 500) {
+        errorMsg += `Server error: ${err.response.data?.detail || 'Unknown error'}`;
+      } else if (err.response?.status === 400) {
+        errorMsg += `Invalid request: ${err.response.data?.detail || 'Bad parameters'}`;
+      } else if (err.request) {
+        errorMsg += "No response from server. Check if backend is running on port 9000.";
+      } else {
+        errorMsg += err.message;
+      }
+      alert(errorMsg);
     }
   };
 

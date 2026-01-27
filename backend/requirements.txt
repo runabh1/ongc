@@ -10,3 +10,7 @@ reportlab
 gunicorn
 python-dotenv
 Pillow
+pdf2image
+pytesseract
+numpy
+scikit-learn

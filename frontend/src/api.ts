@@ -1,22 +1,32 @@
 import axios from 'axios';
 
 // Use the environment variable if available, otherwise fallback to localhost
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+const API_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:9000').replace(/\/$/, '');
 console.log("Using Backend URL:", API_URL);
 
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append('file', file);
-  const response = await axios.post(`${API_URL}/upload`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  });
+  const response = await axios.post(`${API_URL}/upload`, formData);
   return response.data;
 };
 
 export const extractData = async (filename: string, selection: any) => {
   const formData = new FormData();
   formData.append('filename', filename);
-  formData.append('selection', JSON.stringify(selection));
+
+  // Round coordinates to integers to prevent backend floating-point issues
+  let cleanSelection = selection;
+  if (selection && typeof selection === 'object') {
+    cleanSelection = { ...selection };
+    ['x', 'y', 'width', 'height', 'x1', 'y1', 'x2', 'y2'].forEach(key => {
+      if (typeof cleanSelection[key] === 'number') {
+        cleanSelection[key] = Math.round(cleanSelection[key]);
+      }
+    });
+  }
+
+  formData.append('selection', JSON.stringify(cleanSelection));
   const response = await axios.post(`${API_URL}/extract`, formData);
   return response.data;
 };

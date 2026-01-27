@@ -172,7 +172,7 @@ def init_db():
                 from sqlalchemy import inspect
                 inspector = inspect(engine)
                 existing_tables = set(inspector.get_table_names())
-                print(f"✓ Existing tables in database: {existing_tables}")
+                print(f"[OK] Existing tables in database: {existing_tables}")
                 
                 # Split by semicolon and execute each statement
                 statements = [s.strip() for s in sql_script.split(';') if s.strip()]
@@ -182,31 +182,31 @@ def init_db():
                         # Skip if it's a DROP or CREATE for an existing table
                         if statement.startswith("DROP"):
                             conn.execute(text(statement))
-                            print(f"✓ Dropped table: {statement[20:50]}...")
+                            print(f"[OK] Dropped table: {statement[20:50]}...")
                         elif statement.startswith("CREATE"):
                             conn.execute(text(statement))
                             created_count += 1
                             # Extract table name for logging
                             table_name = statement.split("(")[0].replace("CREATE TABLE", "").strip()
-                            print(f"✓ Created table: {table_name}")
+                            print(f"[OK] Created table: {table_name}")
                     except Exception as e:
                         error_msg = str(e).lower()
                         if "already exists" in error_msg or "duplicate" in error_msg:
-                            print(f"⊘ Table already exists (skipped)")
+                            print(f"[SKIP] Table already exists (skipped)")
                         else:
-                            print(f"✗ Error: {statement[:50]}... -> {str(e)}")
+                            print(f"[ERROR] Error: {statement[:50]}... -> {str(e)}")
                             raise
                 
                 conn.commit()
-                print(f"✓ Database initialized: {created_count} tables created/updated")
+                print(f"[OK] Database initialized: {created_count} tables created/updated")
                 
                 # Verify tables were created
                 inspector = inspect(engine)
                 final_tables = set(inspector.get_table_names())
-                print(f"✓ Final tables in database: {final_tables}")
+                print(f"[OK] Final tables in database: {final_tables}")
                 
         except Exception as e:
-            print(f"✗ Database initialization error: {e}")
+            print(f"[ERROR] Database initialization error: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -216,15 +216,15 @@ def init_db():
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.executescript(sql_script)
-                print("✓ SQLite database initialized successfully")
+                print("[OK] SQLite database initialized successfully")
         except Exception as e:
-            print(f"✗ SQLite initialization error: {e}")
+            print(f"[ERROR] SQLite initialization error: {e}")
             raise
 
 
 def get_table_schema(table_name: str):
     """Reflects the database to get strict column definitions."""
-    # Convert to lowercase for PostgreSQL (which stores unquoted identifiers as lowercase)
+    # Convert to lowercase for case-insensitive lookup
     table_name_normalized = table_name.lower()
     
     # Clear cache and re-reflect to get fresh data
@@ -244,14 +244,22 @@ def get_table_schema(table_name: str):
         # Get columns
         columns = inspector.get_columns(table_name_normalized)
         schema_dict = {col['name']: str(col['type']) for col in columns}
-        print(f"✓ Loaded schema for {table_name}: {len(schema_dict)} columns")
+        print(f"[OK] Loaded schema for {table_name}: {len(schema_dict)} columns")
         return schema_dict
     else:
         # SQLite
         metadata.reflect(bind=engine)
-        if table_name not in metadata.tables:
+        # Find table with case-insensitive match
+        matching_table = None
+        for tbl_name in metadata.tables:
+            if tbl_name.lower() == table_name_normalized:
+                matching_table = tbl_name
+                break
+        
+        if not matching_table:
+            print(f"Available tables: {list(metadata.tables.keys())}")
             raise ValueError(f"Table '{table_name}' not found in SQL schema.")
         
-        table = metadata.tables[table_name]
+        table = metadata.tables[matching_table]
         return {col.name: str(col.type) for col in table.columns}
 

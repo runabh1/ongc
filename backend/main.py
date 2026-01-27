@@ -1,8 +1,9 @@
 import os
 import shutil
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
+from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -14,16 +15,31 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from PIL import Image
+from pdf2image import convert_from_path
+import pytesseract
 import io
 import base64
+import re
 
 from database import init_db, get_table_schema, engine
 from sqlalchemy import inspect
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    yield
+    # Startup
+    print("DEBUG: Server starting up...")
+    try:
+        init_db()
+        print("[OK] Database initialized")
+    except Exception as e:
+        print(f"[ERROR] Database init failed: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    yield  # Server is running
+    
+    # Shutdown
+    print("DEBUG: Server shutting down...")
 
 app = FastAPI(title="Well Completion Extractor", lifespan=lifespan)
 
@@ -47,10 +63,18 @@ def read_root():
 # --- MODELS ---
 class RegionSelection(BaseModel):
     page_number: int
-    x_pct: float  # Normalized coordinates (0.0 to 1.0)
-    y_pct: float
-    w_pct: float
-    h_pct: float
+    # Percentage based (Legacy/Default)
+    x_pct: Optional[float] = 0.0
+    y_pct: Optional[float] = 0.0
+    w_pct: Optional[float] = 0.0
+    h_pct: Optional[float] = 0.0
+    # Pixel based (Snip Tool)
+    x: Optional[float] = 0.0
+    y: Optional[float] = 0.0
+    width: Optional[float] = 0.0
+    height: Optional[float] = 0.0
+    view_width: Optional[float] = 0.0
+    view_height: Optional[float] = 0.0
     label: str    # e.g., "CASING"
 
 # --- CONFIGURATION ---
@@ -71,18 +95,212 @@ LABEL_TO_TABLE = {
 
 # --- LOGIC ---
 
-def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: bool = False) -> List[Dict]:
-    """Extract data from an image. Uses OCR if available, otherwise returns region info."""
+# Configure pytesseract (handle common Windows/Linux/macOS installation paths)
+def setup_pytesseract():
+    """Set up pytesseract path for different OS environments."""
+    if os.name == 'nt':  # Windows
+        tesseract_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            r"C:\Users\Public\Tesseract-OCR\tesseract.exe"
+        ]
+        for path in tesseract_paths:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                print(f"[OK] Tesseract found at: {path}")
+                return
+        print("[WARNING] Tesseract not found in common Windows paths")
+    else:
+        # Linux/macOS - check if tesseract is in PATH
+        try:
+            pytesseract.get_tesseract_version()
+            print("[OK] Tesseract found in PATH")
+        except pytesseract.TesseractNotFoundError:
+            print("[WARNING] Tesseract not found in PATH")
+
+setup_pytesseract()
+
+def get_canonical_bbox(
+    page_w: float, page_h: float,
+    view_w: float, view_h: float,
+    sel_x: float, sel_y: float, sel_w: float, sel_h: float
+) -> tuple:
+    """
+    Canonical function to convert UI pixel coordinates to Backend (PDF/Image) coordinates.
+    
+    CRITICAL LOGIC EXPLANATION:
+    1. Coordinate Systems:
+       - PDF Native: Origin is Bottom-Left.
+       - pdfplumber/Image: Origin is Top-Left (abstracted).
+       - Browser/UI: Origin is Top-Left.
+       - We map UI (Top-Left) -> pdfplumber (Top-Left). 
+       - Y-axis inversion is NOT performed manually because pdfplumber's .crop() 
+         expects Top-Left coordinates (x0, top, x1, bottom).
+    
+    2. Trust Width Scaling:
+       - Browsers often report incorrect view_height due to scrollbars, UI chrome, or CSS.
+       - view_width is typically constrained by the container and is reliable.
+       - If the calculated X and Y scales differ by > 2%, we assume the Y scale is 
+         distorted and force it to match the X scale to preserve the selection's aspect ratio.
+    """
+    # 1. Validate View Dimensions
+    if view_w <= 0 or view_h <= 0:
+        # Fallback for legacy calls without view dims (assume 1:1 or percentage)
+        return (0, 0, 0, 0)
+
+    # 2. Calculate Scales
+    scale_x = page_w / view_w
+    scale_y = page_h / view_h
+
+    # 3. Trust Width Logic (Override Height Scale if mismatch > 2%)
+    if abs(scale_x - scale_y) / scale_x > 0.02:
+        print(f"DEBUG: Scale mismatch (X: {scale_x:.4f}, Y: {scale_y:.4f}). Trusting Width.")
+        scale_y = scale_x
+
+    # 4. Transform Coordinates (Top-Left -> Top-Left)
+    x0 = sel_x * scale_x
+    top = sel_y * scale_y
+    x1 = (sel_x + sel_w) * scale_x
+    bottom = (sel_y + sel_h) * scale_y
+
+    # 5. Clamp to Page Dimensions (Ensure valid bbox)
+    x0 = max(0.0, min(x0, page_w))
+    top = max(0.0, min(top, page_h))
+    x1 = max(x0, min(x1, page_w))
+    bottom = max(top, min(bottom, page_h))
+
+    return (x0, top, x1, bottom)
+
+def extract_with_ocr(pdf_path: str, sel: RegionSelection) -> List[Dict]:
+    """Extract data from PDF using OCR with pytesseract - converts pages to images and applies OCR."""
     data = []
     try:
+        print(f"DEBUG: Starting OCR extraction from {pdf_path}")
+        
+        # Check if tesseract is available
+        try:
+            pytesseract.get_tesseract_version()
+        except pytesseract.TesseractNotFoundError:
+            print("WARNING: Tesseract not found - OCR extraction disabled, will fall back to pdfplumber")
+            return []
+        
+        # USE PDFPLUMBER FOR CROPPING (Better coordinate handling)
+        with pdfplumber.open(pdf_path) as pdf:
+            if sel.page_number < 1 or sel.page_number > len(pdf.pages):
+                print(f"DEBUG: Page {sel.page_number} out of range")
+                return []
+                
+            page = pdf.pages[sel.page_number - 1]
+            width, height = float(page.width), float(page.height)
+            
+            # Use Canonical Coordinate Transformation
+            if sel.view_width and sel.view_width > 0:
+                bbox = get_canonical_bbox(width, height, float(sel.view_width), float(sel.view_height),
+                                          sel.x, sel.y, sel.width, sel.height)
+            else:
+                # Legacy Percentage Fallback
+                bbox = (sel.x_pct * width, sel.y_pct * height, 
+                        (sel.x_pct + sel.w_pct) * width, (sel.y_pct + sel.h_pct) * height)
+
+            print(f"DEBUG: PDF Dimensions: {width}x{height}")
+            print(f"DEBUG: Cropping bbox: {bbox}")
+            
+            if bbox[2] - bbox[0] <= 0 or bbox[3] - bbox[1] <= 0:
+                return []
+            
+            # Crop the image to the selected region
+            try:
+                cropped_page = page.crop(bbox)
+                # Convert crop to image (high res for OCR)
+                # Resolution 600 provides better detail for small text/tables
+                img = cropped_page.to_image(resolution=600).original # PIL Image
+
+                # DEBUG: Save crop to verify alignment
+                img.save("DEBUG_CROP.png")
+
+                # --- Advanced Image Preprocessing for OCR ---
+                # 1. Convert to grayscale
+                img = img.convert('L')
+                # 2. Upscale 2x using LANCZOS
+                new_size = (img.width * 2, img.height * 2)
+                img = img.resize(new_size, getattr(Image, 'Resampling', Image).LANCZOS)
+            except Exception as e:
+                print(f"DEBUG: Error cropping/converting page: {e}")
+                return []
+            
+            # Apply OCR to the cropped image using pytesseract
+            print("DEBUG: Applying pytesseract OCR to cropped region")
+            # Config: OEM 3 (Default), PSM 6 (Block of text), Preserve spacing
+            custom_config = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
+            extracted_text = pytesseract.image_to_string(img, config=custom_config)
+            
+            if not extracted_text or not extracted_text.strip():
+                print("DEBUG: No text extracted from OCR")
+                return []
+            
+            print(f"DEBUG: OCR extracted text ({len(extracted_text)} chars)")
+            
+            # Parse extracted text into structured data
+            kv_data = {}
+            lines = extracted_text.split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Try to parse as key-value pair
+                if ':' in line and len(line) < 100:
+                    parts = line.split(':', 1)
+                    k = parts[0].strip()
+                    v = parts[1].strip()
+                    if k and v and len(k) < 50:
+                        kv_data[k.lower().replace(" ", "_")] = v
+            
+            # Return parsed data
+            if kv_data:
+                print(f"DEBUG: Found {len(kv_data)} key-value pairs from OCR")
+                data.append(kv_data)
+            
+            if not data:
+                # Return empty so we can fallback to pdfplumber (which is better at tables)
+                pass
+    except Exception as e:
+        print(f"OCR extraction error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+    
+    return data
+
+def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: bool = False) -> List[Dict]:
+    """Extract data from an image using pytesseract OCR."""
+    data = []
+    try:
+        print(f"DEBUG: Starting image OCR extraction from {image_path}")
+        
+        # Check if tesseract is available
+        try:
+            pytesseract.get_tesseract_version()
+        except pytesseract.TesseractNotFoundError:
+            print("WARNING: Tesseract not found - OCR extraction disabled for images")
+            return []
+        
         image = Image.open(image_path)
         width, height = image.size
         
-        # Convert normalized percentages to pixel coordinates
-        x0 = max(0, min(int(sel.x_pct * width), width))
-        y0 = max(0, min(int(sel.y_pct * height), height))
-        x1 = max(x0, min(int((sel.x_pct + sel.w_pct) * width), width))
-        y1 = max(y0, min(int((sel.y_pct + sel.h_pct) * height), height))
+        # Use Canonical Coordinate Transformation
+        if sel.view_width and sel.view_width > 0:
+            bbox = get_canonical_bbox(float(width), float(height), float(sel.view_width), float(sel.view_height),
+                                      sel.x, sel.y, sel.width, sel.height)
+        else:
+            bbox = (sel.x_pct * width, sel.y_pct * height, 
+                    (sel.x_pct + sel.w_pct) * width, (sel.y_pct + sel.h_pct) * height)
+        
+        x0, y0, x1, y1 = bbox
+        
+        print(f"DEBUG: Image dimensions: {width}x{height}")
+        print(f"DEBUG: Crop box: ({x0}, {y0}, {x1}, {y1})")
         
         if x1 - x0 <= 0 or y1 - y0 <= 0:
             return []
@@ -90,194 +308,281 @@ def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: b
         # Crop the image to the selected region
         cropped_image = image.crop((x0, y0, x1, y1))
         
-        # Try OCR to extract text
-        text = ""
-        try:
-            text = pytesseract.image_to_string(cropped_image)
-        except Exception as ocr_error:
-            # OCR failed - this is common if Tesseract is not installed
-            print(f"OCR failed (Tesseract may not be installed): {ocr_error}")
-            # Try to get text from image metadata or return a placeholder
-            text = ""
+        # DEBUG: Save crop
+        cropped_image.save("DEBUG_CROP.png")
+
+        # --- Advanced Image Preprocessing for OCR ---
+        # 1. Convert to grayscale
+        cropped_image = cropped_image.convert('L')
+        # 2. Upscale 2x using LANCZOS
+        new_size = (cropped_image.width * 2, cropped_image.height * 2)
+        resample_method = getattr(Image, 'Resampling', Image).LANCZOS
+        cropped_image = cropped_image.resize(new_size, resample_method)
         
-        # If we got text from OCR, parse it
-        if text and text.strip():
-            # Try to parse as key-value pairs or tabular data
-            kv_data = {}
-            lines = text.split('\n')
+        # Run pytesseract OCR on the cropped image
+        print("DEBUG: Applying pytesseract OCR to image region")
+        custom_config = r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
+        extracted_text = pytesseract.image_to_string(cropped_image, config=custom_config)
+        
+        if not extracted_text or not extracted_text.strip():
+            print("DEBUG: No text extracted from OCR")
+            return []
+        
+        print(f"DEBUG: OCR extracted text ({len(extracted_text)} chars)")
+        
+        # Parse extracted text into structured data
+        kv_data = {}
+        table_rows = []
+        
+        lines = extracted_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
             
-            # First try to identify if it's a table (lines with multiple fields)
-            is_table = False
-            for line in lines:
-                # Count separators that might indicate tabular data
-                if '\t' in line or '  ' in line:
-                    is_table = True
-                    break
-            
-            if is_table:
-                # Try to parse as table
-                for line in lines:
-                    if line.strip():
-                        # Split by tabs or multiple spaces
-                        parts = line.split('\t') if '\t' in line else line.split()
-                        for i, part in enumerate(parts):
-                            if part.strip():
-                                kv_data[f"field_{i}"] = part.strip()
+            # Try to parse as key-value pair
+            if ':' in line and len(line) < 100:
+                parts = line.split(':', 1)
+                k = parts[0].strip()
+                v = parts[1].strip()
+                if k and v and len(k) < 50:
+                    if use_raw_headers:
+                        kv_data[k] = v
+                    else:
+                        kv_data[k.lower().replace(" ", "_")] = v
             else:
-                # Parse as key-value pairs
-                for line in lines:
-                    if ':' in line:
-                        parts = line.split(':', 1)
-                        k = parts[0].strip()
-                        v = parts[1].strip()
-                        if k and v:
-                            kv_data[k] = v
-            
-            if kv_data:
-                data.append(kv_data)
-            else:
-                # No structured data found, return raw text
-                data.append({"extracted_text": text})
-        else:
-            # No text extracted - return placeholder indicating region was empty
-            data.append({"_warning": "No readable text found in selected region. Ensure the region contains visible text or use AI mode for better results."})
+                # Collect lines that might be table rows
+                if len(line) > 10:
+                    table_rows.append(line)
+        
+        # Return parsed data
+        if kv_data:
+            print(f"DEBUG: Found {len(kv_data)} key-value pairs from OCR")
+            data.append(kv_data)
+        
+        if table_rows:
+            print(f"DEBUG: Found {len(table_rows)} potential table rows")
+            for row_text in table_rows:
+                # Split by multiple spaces to separate columns
+                cells = [cell.strip() for cell in re.split(r'\s{2,}|\t', row_text) if cell.strip()]
+                if len(cells) >= 2:
+                    row_dict = {f"col_{i}": cell for i, cell in enumerate(cells)}
+                    data.append(row_dict)
+        
+        if not data:
+            # Return raw extracted text if no structured data found
+            data.append({"extracted_text": extracted_text[:1000], "_source": "ocr"})
             
     except Exception as e:
         print(f"Image extraction error: {e}")
-        data.append({"_error": f"Failed to process image: {str(e)}"})
+        import traceback
+        traceback.print_exc()
+        return []
     
     return data
 
 def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bool = False) -> List[Dict]:
+    """Extract tables from ONLY the cropped region you selected."""
     data = []
     with pdfplumber.open(pdf_path) as pdf:
-        # pdfplumber pages are 0-indexed
         page = pdf.pages[sel.page_number - 1]
         width, height = page.width, page.height
         
         print(f"DEBUG: Page dimensions: {width}x{height}")
-        print(f"DEBUG: Selection (normalized): x_pct={sel.x_pct}, y_pct={sel.y_pct}, w_pct={sel.w_pct}, h_pct={sel.h_pct}")
         
-        # Convert normalized percentages to PDF points and clamp to page bounds
-        x0 = max(0, min(sel.x_pct * width, width))
-        top = max(0, min(sel.y_pct * height, height))
-        x1 = max(x0, min((sel.x_pct + sel.w_pct) * width, width))
-        bottom = max(top, min((sel.y_pct + sel.h_pct) * height, height))
+        # Use Canonical Coordinate Transformation
+        if sel.view_width and sel.view_width > 0:
+            bbox = get_canonical_bbox(float(width), float(height), float(sel.view_width), float(sel.view_height),
+                                      sel.x, sel.y, sel.width, sel.height)
+        else:
+            bbox = (sel.x_pct * width, sel.y_pct * height, 
+                    (sel.x_pct + sel.w_pct) * width, (sel.y_pct + sel.h_pct) * height)
+
+        x0, top, x1, bottom = bbox
+        print(f"DEBUG: Cropped bbox (clamped): ({x0}, {top}, {x1}, {bottom})")
         
-        bbox = (x0, top, x1, bottom)
-        
-        print(f"DEBUG: Cropped bbox: ({x0}, {top}, {x1}, {bottom})")
-        print(f"DEBUG: Crop dimensions: {x1-x0} x {bottom-top}")
-        
-        if x1 - x0 <= 0 or bottom - top <= 0:
+        if x1 - x0 <= 1 or bottom - top <= 1:
+            print("DEBUG: Selection too small")
             return []
         
-        # Crop the page to ONLY the selected region
+        # Crop page and extract tables ONLY from that region
         cropped = page.crop(bbox)
         
-        # Get ONLY tables from the cropped region (not from full page)
-        cropped_tables = cropped.extract_tables()
+        tables = []
         
-        print(f"DEBUG: Found {len(cropped_tables) if cropped_tables else 0} tables in cropped region")
+        # 🎯 STRATEGY 1: Clustering (The "Industry-Grade" Fix for Casing)
+        # Only apply if label suggests it's a casing table (or similar complex table)
+        if "CASING" in sel.label.upper():
+            try:
+                print("DEBUG: Attempting specialized deterministic extraction for CASING")
+                words = cropped.extract_words(use_text_flow=True, keep_blank_chars=False)
+                
+                if words:
+                    # 🔧 Step 1: Lock column boundaries ONCE
+                    # sort words by x center
+                    words_sorted = sorted(words, key=lambda w: (w["x0"] + w["x1"]) / 2)
+                    
+                    # expected number of columns
+                    NUM_COLS = 9
+                    
+                    if len(words_sorted) >= NUM_COLS:
+                        # split into 9 roughly equal vertical slices
+                        columns = [[] for _ in range(NUM_COLS)]
+                        
+                        for i, w in enumerate(words_sorted):
+                            columns[i * NUM_COLS // len(words_sorted)].append(w)
+                        
+                        # compute column boundaries
+                        col_bounds = []
+                        for col in columns:
+                            if col:
+                                xs = [w["x0"] for w in col] + [w["x1"] for w in col]
+                                col_bounds.append((min(xs), max(xs)))
+                            else:
+                                col_bounds.append((-1, -1))
+
+                        # 🔧 Step 2: Assign every word to EXACTLY one column
+                        def assign_column(word, col_bounds):
+                            cx = (word["x0"] + word["x1"]) / 2
+                            for i, (x0, x1) in enumerate(col_bounds):
+                                if x0 == -1: continue
+                                if x0 - 2 <= cx <= x1 + 2:
+                                    return i
+                            return None
+
+                        for w in words:
+                            w["col"] = assign_column(w, col_bounds)
+                            
+                        # 🔧 Step 3: Build rows using vertical overlap
+                        def same_row(w1, w2, tol=4):
+                            return not (
+                                w1["bottom"] < w2["top"] - tol or
+                                w2["bottom"] < w1["top"] - tol
+                            )
+
+                        rows = []
+                        # Sort by top to process top-down
+                        for w in sorted(words, key=lambda w: w["top"]):
+                            placed = False
+                            for row in rows:
+                                if same_row(w, row[0]):
+                                    row.append(w)
+                                    placed = True
+                                    break
+                            if not placed:
+                                rows.append([w])
+                                
+                        # 🔧 Step 4: Reconstruct rows column-by-column
+                        # Sort rows by vertical position
+                        rows.sort(key=lambda r: r[0]["top"])
+                        
+                        for row in rows:
+                            row_cells = [""] * NUM_COLS
+                            for col in range(NUM_COLS):
+                                cell_words = [w for w in row if w.get("col") == col]
+                                # Sort words in cell by x position
+                                cell_words.sort(key=lambda w: w["x0"])
+                                row_cells[col] = " ".join([w["text"] for w in cell_words]).strip()
+                            table_data.append(row_cells)
+                        
+                        if table_data:
+                            tables = [table_data]
+                            print(f"DEBUG: Deterministic extraction found table with {len(table_data)} rows")
+                    else:
+                        print("DEBUG: Not enough words for column estimation")
+            except Exception as e:
+                print(f"DEBUG: Deterministic extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # 🎯 STRATEGY 2: Standard pdfplumber extraction (Fallback)
+        if not tables:
+            try:
+                tables = cropped.extract_tables(table_settings={
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "snap_tolerance": 5,
+                    "min_words_vertical": 2,
+                    "intersection_x_tolerance": 10
+                })
+                print(f"DEBUG: Found {len(tables) if tables else 0} tables in cropped region")
+            except Exception as e:
+                print(f"DEBUG: Error extracting tables: {e}")
+                tables = []
         
-        table_extracted = False
-        
-        if cropped_tables:
-            # Process tables - prefer larger tables (more likely to be the main data)
-            cropped_tables.sort(key=lambda t: len(t) * len(t[0]) if t and t[0] else 0, reverse=True)
-            
-            for table_idx, table in enumerate(cropped_tables):
-                if not table or not table[0]: 
-                    print(f"DEBUG: Skipping table {table_idx} - empty or no header")
+        # Extract from first table found
+        if tables:
+            for table_idx, table in enumerate(tables):
+                if not table or len(table) < 2:
                     continue
                 
-                print(f"DEBUG: Processing table {table_idx} with {len(table)} rows and {len(table[0])} cols")
+                print(f"DEBUG: Processing table {table_idx}: {len(table)} rows x {len(table[0])} cols")
                 
-                # Assume first row is header
+                # Get headers from first row
                 header_row = table[0]
-                valid_headers = {} # index -> cleaned_name
-                header_count = 0
-                header_texts = []
+                headers = {}
+                for col_idx, cell in enumerate(header_row):
+                    if cell and str(cell).strip():
+                        text = str(cell).strip()
+                        headers[col_idx] = text if use_raw_headers else text.lower().replace(" ", "_").replace(".", "")
                 
-                for idx, h in enumerate(header_row):
-                    if h and str(h).strip():
-                        header_text = str(h).strip()
-                        header_texts.append(header_text)
-                        if use_raw_headers:
-                            valid_headers[idx] = header_text
-                        else:
-                            valid_headers[idx] = header_text.lower().replace(" ", "_").replace(".", "")
-                        header_count += 1
+                print(f"DEBUG: Headers: {list(headers.values())}")
                 
-                print(f"DEBUG: Table {table_idx} headers: {header_texts}")
-                print(f"DEBUG: Table {table_idx} has {header_count} valid headers")
-                
-                # Only process if we have reasonable headers (at least 2)
-                if header_count < 2:
-                    print(f"DEBUG: Skipping table {table_idx} - insufficient headers")
-                    continue
-                
-                # Check if this table has enough data rows (at least 1 complete row)
-                valid_data_rows = 0
-                for row in table[1:]:
-                    # Count how many cells in this row have content
-                    filled_cells = sum(1 for cell in row if cell and str(cell).strip())
-                    if filled_cells >= header_count * 0.5:  # At least 50% of headers
-                        valid_data_rows += 1
-                
-                print(f"DEBUG: Table {table_idx} has {valid_data_rows} valid data rows")
-                
-                if valid_data_rows == 0:
-                    print(f"DEBUG: Skipping table {table_idx} - no valid data rows")
+                if len(headers) < 2:
                     continue
                 
                 # Extract data rows
-                rows_extracted = 0
-                for row_idx, row in enumerate(table[1:]):
-                    row_data = {}
-                    for idx, val in enumerate(row):
-                        if idx in valid_headers and val and str(val).strip():
-                            row_data[valid_headers[idx]] = str(val).strip()
-                    if row_data:
-                        print(f"DEBUG: Extracted row {row_idx}: {list(row_data.keys())}")
-                        data.append(row_data)
-                        rows_extracted += 1
-                        table_extracted = True
+                for row in table[1:]:
+                    row_dict = {}
+                    for col_idx, cell in enumerate(row):
+                        if col_idx in headers and cell and str(cell).strip():
+                            row_dict[headers[col_idx]] = str(cell).strip()
+                    
+                    if row_dict:
+                        data.append(row_dict)
                 
-                print(f"DEBUG: Extracted {rows_extracted} rows from table {table_idx}")
+                print(f"DEBUG: Extracted {len(data)} rows from table {table_idx}")
                 
-                # If we successfully extracted data, use this table
-                if rows_extracted > 0:
-                    print(f"DEBUG: Using table {table_idx} - breaking out of loop")
-                    break
+                if data:
+                    return data
         
-        if not table_extracted:
-            # Fallback: Extract text from cropped region only
-            text = cropped.extract_text()
+        # Fallback to text
+        print("DEBUG: No tables in cropped region, trying text extraction")
+        # layout=True preserves visual spacing better, crucial for regex splitting
+        text = cropped.extract_text(layout=True)
+        
+        if text and text.strip():
+            # Try to parse text as table manually (looking for whitespace gaps)
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
             
-            print(f"DEBUG: No table found, attempting text extraction")
-            print(f"DEBUG: Extracted text length: {len(text) if text else 0}")
+            # Heuristic: If multiple lines have gaps of 2+ spaces, it's likely a table
+            parsed_rows = []
+            for line in lines:
+                # Split by 2 or more spaces
+                parts = [p.strip() for p in re.split(r'\s{2,}|\t', line) if p.strip()]
+                if len(parts) >= 2:
+                    parsed_rows.append(parts)
             
-            # Attempt simple KV parsing (e.g. "Field: Value")
-            kv_data = {}
-            if text:
-                lines = text.split('\n')
-                for line in lines:
-                    # Split by first colon
-                    if ':' in line:
-                        parts = line.split(':', 1)
-                        k = parts[0].strip()
-                        v = parts[1].strip()
-                        if k and v:
-                            kv_data[k] = v
-            
-            if kv_data:
-                print(f"DEBUG: Found {len(kv_data)} key-value pairs")
-                data.append(kv_data)
+            if len(parsed_rows) >= 2:
+                print(f"DEBUG: Manually parsed {len(parsed_rows)} rows from text")
+                # Assume first row is header
+                headers = parsed_rows[0]
+                
+                # Create dicts for remaining rows
+                for row_parts in parsed_rows[1:]:
+                    row_dict = {}
+                    for i, val in enumerate(row_parts):
+                        # Map value to header if possible, else use col_index
+                        if i < len(headers):
+                            header_name = headers[i] if use_raw_headers else headers[i].lower().replace(" ", "_").replace(".", "")
+                            row_dict[header_name] = val
+                        else:
+                            row_dict[f"col_{i}"] = val
+                    data.append(row_dict)
             else:
-                print(f"DEBUG: No key-value pairs found, returning raw text warning")
-                data.append({"raw_text": text if text else "No text found", "_warning": "No table structure detected in selected region"})
-            
+                # Truly unstructured text
+                data.append({"raw_text": text[:2000], "_warning": "No table found - extracted text"})
+    
     return data
 
 # System columns to ignore during validation/display so we don't flag them as missing
@@ -331,13 +636,30 @@ def validate_data(data: List[Dict], table_name: str):
             if norm_key in schema_map:
                 real_col_name = schema_map[norm_key]
             
-            # 2. Fuzzy Match (Substring)
+            # 2. Fuzzy Match (Substring) - check if key contains SQL column name
             if not real_col_name:
                 for sql_norm, sql_orig in sql_cols_normalized:
                     # Check if SQL column is inside Extracted Header (e.g. "FIELD" in "FIELDNAME")
                     if sql_norm in norm_key and len(sql_norm) > 2: 
                         real_col_name = sql_orig
                         break
+            
+            # 3. Smart semantic matching for common patterns
+            if not real_col_name:
+                key_lower = key.lower()
+                # Pattern-based matching for common renamings
+                if "type" in key_lower and ("casing" in schema.keys() or any("CASING_TYPE" in c for c in schema.keys())):
+                    real_col_name = "CASING_TYPE"
+                elif ("depth" in key_lower or "bottom" in key_lower) and "CASING_BOTTOM" in schema.keys():
+                    real_col_name = "CASING_BOTTOM"
+                elif ("top" in key_lower) and "CASING_TOP" in schema.keys():
+                    real_col_name = "CASING_TOP"
+                elif ("diameter" in key_lower or "od" in key_lower) and "OUTER_DIAMETER" in schema.keys():
+                    real_col_name = "OUTER_DIAMETER"
+                elif ("length" in key_lower or "grade" in key_lower) and "STEEL_GRADE" in schema.keys():
+                    real_col_name = "STEEL_GRADE"
+                elif ("material" in key_lower or "grade" in key_lower) and "MATERIAL_TYPE" in schema.keys():
+                    real_col_name = "MATERIAL_TYPE"
             
             if real_col_name:
                 clean_row[real_col_name] = val
@@ -396,7 +718,37 @@ async def extract(
     if is_image:
         raw_data = extract_from_image(file_path, sel_obj, use_raw_headers=True)
     else:
+        # Try native PDF extraction first (Best for tables in digital PDFs)
+        print(f"DEBUG: Attempting native pdfplumber extraction")
         raw_data = extract_from_region(file_path, sel_obj, use_raw_headers=True)
+
+        # Evaluate Native Result
+        native_quality_low = False
+        if not raw_data or len(raw_data) == 0:
+            native_quality_low = True
+        elif "_warning" in raw_data[0] or "_error" in raw_data[0]:
+            # Fix 2: Only OCR if PDF has NO TEXT LAYER
+            # If we have substantial text, assume digital PDF and accept the text result (don't OCR)
+            raw_text = raw_data[0].get("raw_text", "")
+            if len(raw_text.strip()) > 50:
+                native_quality_low = False
+            else:
+                native_quality_low = True
+        elif len(raw_data[0].keys()) < 2:
+            # If we only found 1 column, native extraction probably failed to split columns
+            native_quality_low = True
+        
+        # Fallback to OCR if native extraction yields nothing
+        if not raw_data or len(raw_data) == 0:
+            print(f"DEBUG: Native extraction returned no data, trying OCR")
+            raw_data = extract_with_ocr(file_path, sel_obj)
+        # Fallback to OCR if native extraction was poor
+        if native_quality_low:
+            print(f"DEBUG: Native extraction quality low, trying OCR")
+            ocr_data = extract_with_ocr(file_path, sel_obj)
+            # Use OCR data if it found something
+            if ocr_data and len(ocr_data) > 0:
+                raw_data = ocr_data
     
     if not raw_data:
         return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
@@ -606,4 +958,4 @@ async def export_pdf(data: str = Form(...), table_name: str = Form(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=9000)

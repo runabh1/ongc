@@ -67,32 +67,30 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   };
 
   const handleLabelSelect = (label: string) => {
-    if (!containerRef.current || !pageDimensions) return;
+    if (!containerRef.current) return;
     
     // Get the actual rendered container dimensions
     const rect = containerRef.current.getBoundingClientRect();
     
-    // Calculate scale factor between rendered page and actual dimensions
-    const scaleX = pageDimensions.width / rect.width;
-    const scaleY = pageDimensions.height / rect.height;
-    
-    // Convert screen coordinates to actual coordinates
-    const actualX = selection.x * scaleX;
-    const actualY = selection.y * scaleY;
-    const actualWidth = selection.width * scaleX;
-    const actualHeight = selection.height * scaleY;
-    
-    // Normalize to 0.0-1.0 range based on actual dimensions
-    const normalized = {
+    // Send raw pixel coordinates and view dimensions
+    // This delegates scaling logic to the backend which knows the true PDF dimensions
+    const payload = {
       page_number: isImage ? 1 : pageNumber,
-      x_pct: actualX / pageDimensions.width,
-      y_pct: actualY / pageDimensions.height,
-      w_pct: actualWidth / pageDimensions.width,
-      h_pct: actualHeight / pageDimensions.height,
+      x: selection.x,
+      y: selection.y,
+      width: selection.width,
+      height: selection.height,
+      view_width: rect.width,
+      view_height: rect.height,
+      // Zero out percentages to ensure backend uses pixel mode
+      x_pct: 0,
+      y_pct: 0,
+      w_pct: 0,
+      h_pct: 0,
       label: label
     };
 
-    onExtract(normalized);
+    onExtract(payload);
     setSelection(null);
     setShowLabelSelector(false);
   };
@@ -150,7 +148,7 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
         <div 
           ref={containerRef}
           className="relative shadow-2xl border border-gray-200 bg-white"
-          style={{ cursor: isSelecting ? 'crosshair' : 'default', display: 'inline-block' }}
+          style={{ cursor: isSelecting ? 'crosshair' : 'default', display: 'block', width: 'fit-content' }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
