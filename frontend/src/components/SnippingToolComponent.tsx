@@ -21,7 +21,6 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   const [selection, setSelection] = useState<any>(null);
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [showLabelSelector, setShowLabelSelector] = useState(false);
-  const [pageDimensions, setPageDimensions] = useState<{ width: number; height: number } | null>(null);
   const [isImage, setIsImage] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
@@ -159,13 +158,6 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
               src={URL.createObjectURL(file)}
               alt="Upload preview"
               style={{ width: '800px', display: 'block' }}
-              onLoad={(e) => {
-                const img = e.currentTarget;
-                setPageDimensions({
-                  width: img.naturalWidth,
-                  height: img.naturalHeight
-                });
-              }}
             />
           ) : (
             <Document 
@@ -178,13 +170,6 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
                 width={800} 
                 renderTextLayer={false} 
                 renderAnnotationLayer={false}
-                onLoadSuccess={(page: any) => {
-                  // Capture actual PDF page dimensions
-                  setPageDimensions({
-                    width: page.width,
-                    height: page.height
-                  });
-                }}
               />
             </Document>
           )}

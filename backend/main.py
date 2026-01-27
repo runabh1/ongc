@@ -15,10 +15,7 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from PIL import Image
-from pdf2image import convert_from_path
 import pytesseract
-import io
-import base64
 import re
 
 from database import init_db, get_table_schema, engine
