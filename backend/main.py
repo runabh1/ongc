@@ -18,6 +18,9 @@ from PIL import Image
 import pytesseract
 import re
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from database import init_db, get_table_schema, engine
 from sqlalchemy import inspect
@@ -126,7 +129,7 @@ def setup_pytesseract():
 setup_pytesseract()
 
 # --- GEMINI LLM CONFIGURATION ---
-GEMINI_API_KEY = "AIzaSyCQkOOEJRBnZIvh1YdEC8bedRFLxJ4f0NE"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
 def parse_with_gemini(text: str, label: str) -> List[Dict]:
