@@ -992,12 +992,40 @@ async def save_to_db(
         cols_to_drop = [c for c in df.columns if c.startswith("_")]
         df = df.drop(columns=cols_to_drop)
         
+        # Remove ID if present (let DB handle auto-increment)
+        if "ID" in df.columns:
+            df = df.drop(columns=["ID"])
+            
+        # Filter columns to match schema (prevent "column not found" errors)
+        try:
+            schema = get_table_schema(table_name)
+            valid_columns = set(schema.keys())
+            # Keep only columns that exist in the DB schema
+            existing_cols = [c for c in df.columns if c in valid_columns]
+            df = df[existing_cols]
+        except Exception as e:
+            print(f"Schema validation warning: {e}")
+            
+        if df.empty:
+            return {"message": "No valid data columns to save"}
+
         # Insert into DB (append mode)
         df.to_sql(table_name, engine, if_exists='append', index=False, method='multi')
         
         return {"message": f"Successfully saved {len(df)} rows to {table_name}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
+        error_msg = str(e)
+        print(f"Database Save Error: {error_msg}")
+        
+        # Provide user-friendly error messages
+        if "UNIQUE constraint" in error_msg or "duplicate key" in error_msg:
+            raise HTTPException(status_code=409, detail="Save Failed: Duplicate record exists (UWI/ID already in database).")
+        elif "NOT NULL constraint" in error_msg or "null value" in error_msg:
+            raise HTTPException(status_code=400, detail="Save Failed: Missing required fields (e.g., UWI is required).")
+        elif "no such table" in error_msg:
+            raise HTTPException(status_code=404, detail=f"Save Failed: Table {table_name} does not exist.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Database Error: {error_msg}")
 
 @app.post("/export")
 async def export_csv(data: str = Form(...), table_name: str = Form(...)):
