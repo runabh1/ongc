@@ -93,8 +93,11 @@ LABEL_TO_TABLE = {
 # --- LOGIC ---
 
 # Configure pytesseract (handle common Windows/Linux/macOS installation paths)
+TESSERACT_AVAILABLE = False
+
 def setup_pytesseract():
     """Set up pytesseract path for different OS environments."""
+    global TESSERACT_AVAILABLE
     if os.name == 'nt':  # Windows
         tesseract_paths = [
             r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -104,6 +107,7 @@ def setup_pytesseract():
         for path in tesseract_paths:
             if os.path.exists(path):
                 pytesseract.pytesseract.tesseract_cmd = path
+                TESSERACT_AVAILABLE = True
                 print(f"[OK] Tesseract found at: {path}")
                 return
         print("[WARNING] Tesseract not found in common Windows paths")
@@ -111,8 +115,10 @@ def setup_pytesseract():
         # Linux/macOS - check if tesseract is in PATH
         try:
             pytesseract.get_tesseract_version()
+            TESSERACT_AVAILABLE = True
             print("[OK] Tesseract found in PATH")
         except pytesseract.TesseractNotFoundError:
+            TESSERACT_AVAILABLE = False
             print("[WARNING] Tesseract not found in PATH")
 
 setup_pytesseract()
@@ -748,7 +754,10 @@ async def extract(
                 raw_data = ocr_data
     
     if not raw_data:
-        return {"message": "No data found in selection", "raw_data": [], "sql_data": [], "schema": []}
+        msg = "No data found in selection"
+        if not TESSERACT_AVAILABLE:
+            msg += " (OCR unavailable: Tesseract not found on server)"
+        return {"message": msg, "raw_data": [], "sql_data": [], "schema": []}
 
     # Validate
     result = validate_data(raw_data, table_name)

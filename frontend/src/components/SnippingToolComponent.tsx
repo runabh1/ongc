@@ -5,7 +5,7 @@ import 'react-pdf/dist/Page/TextLayer.css';
 
 // Configure PDF Worker
 if (typeof window !== 'undefined') {
-  const workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+  const workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
   pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 }
 
@@ -22,6 +22,7 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
   const [startPos, setStartPos] = useState({ x: 0, y: 0 });
   const [showLabelSelector, setShowLabelSelector] = useState(false);
   const [isImage, setIsImage] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -152,6 +153,12 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
         >
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-20">
+              <div className="text-red-600 font-medium p-4 bg-white shadow rounded">{error}</div>
+            </div>
+          )}
+
           {isImage ? (
             <img
               ref={imageRef}
@@ -162,8 +169,14 @@ export const SnippingTool: React.FC<SnippingToolProps> = ({ file, onExtract }) =
           ) : (
             <Document 
               file={file} 
-              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-              onLoadError={(error) => console.error("Error loading PDF:", error)}
+              onLoadSuccess={({ numPages }) => {
+                setNumPages(numPages);
+                setError(null);
+              }}
+              onLoadError={(err) => {
+                console.error("Error loading PDF:", err);
+                setError("Failed to load PDF. Please try a different file or refresh.");
+              }}
             >
               <Page 
                 pageNumber={pageNumber} 
