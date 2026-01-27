@@ -996,6 +996,10 @@ async def save_to_db(
         if "ID" in df.columns:
             df = df.drop(columns=["ID"])
             
+        # FIX: Replace string "None" and empty strings with None to ensure NULL in DB
+        # This fixes the "invalid input syntax for type double precision: 'None'" error
+        df = df.replace({"None": None, "none": None, "": None})
+            
         # Filter columns to match schema (prevent "column not found" errors)
         try:
             schema = get_table_schema(table_name)
