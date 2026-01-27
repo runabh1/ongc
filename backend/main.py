@@ -999,6 +999,13 @@ async def save_to_db(
         # FIX: Replace string "None" and empty strings with None to ensure NULL in DB
         # This fixes the "invalid input syntax for type double precision: 'None'" error
         df = df.replace({"None": None, "none": None, "": None})
+        
+        # Drop rows where all columns are None (completely empty rows)
+        df = df.dropna(how='all')
+
+        # Ensure UWI is present if it's a required field (prevents NotNullViolation)
+        if "UWI" in df.columns:
+            df = df.dropna(subset=["UWI"])
             
         # Filter columns to match schema (prevent "column not found" errors)
         try:
@@ -1011,7 +1018,7 @@ async def save_to_db(
             print(f"Schema validation warning: {e}")
             
         if df.empty:
-            return {"message": "No valid data columns to save"}
+            return {"message": "No valid data to save (rows empty or missing UWI)"}
 
         # Insert into DB (append mode)
         df.to_sql(table_name, engine, if_exists='append', index=False, method='multi')
