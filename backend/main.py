@@ -339,6 +339,13 @@ def extract_with_ocr(pdf_path: str, sel: RegionSelection) -> List[Dict]:
                 if gemini_data:
                     print(f"DEBUG: Gemini extracted {len(gemini_data)} records from OCR text")
                     data.extend(gemini_data)
+                else:
+                    # Fallback if Gemini fails
+                    print("DEBUG: Gemini extraction failed, falling back to manual parsing")
+                    manual_data = parse_text_manually(extracted_text)
+                    if manual_data:
+                        manual_data[0]["_warning"] = "AI extraction failed, used manual fallback"
+                        data.extend(manual_data)
             else:
                 # Use Manual parsing
                 manual_data = parse_text_manually(extracted_text)
@@ -419,6 +426,15 @@ def extract_from_image(image_path: str, sel: RegionSelection, use_raw_headers: b
             if gemini_data:
                 print(f"DEBUG: Gemini extracted {len(gemini_data)} records from Image")
                 data.extend(gemini_data)
+            else:
+                # Fallback if Gemini fails
+                print("DEBUG: Gemini extraction failed, falling back to manual parsing")
+                manual_data = parse_text_manually(extracted_text)
+                if manual_data:
+                    manual_data[0]["_warning"] = "AI extraction failed, used manual fallback"
+                    data.extend(manual_data)
+                else:
+                    data.append({"extracted_text": extracted_text[:1000], "_source": "ocr_raw", "_warning": "AI extraction failed"})
         else:
             # Use Manual parsing
             manual_data = parse_text_manually(extracted_text)
@@ -612,6 +628,15 @@ def extract_from_region(pdf_path: str, sel: RegionSelection, use_raw_headers: bo
                 if gemini_data:
                     print(f"DEBUG: Gemini extracted {len(gemini_data)} records from PDF text")
                     data.extend(gemini_data)
+                else:
+                    # Fallback if Gemini fails
+                    print("DEBUG: Gemini extraction failed, falling back to manual parsing")
+                    manual_data = parse_text_manually(text)
+                    if manual_data:
+                        manual_data[0]["_warning"] = "AI extraction failed, used manual fallback"
+                        data.extend(manual_data)
+                    else:
+                        data.append({"raw_text": text[:2000], "_warning": "AI extraction failed - extracted raw text"})
             else:
                 # Use Manual parsing
                 manual_data = parse_text_manually(text)
